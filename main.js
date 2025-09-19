@@ -11,9 +11,8 @@
   const ctx = canvas.getContext('2d');
 
   const dom = {
-    screens: {
+    overlays: {
       title: document.getElementById('title-screen'),
-      game: document.getElementById('game-screen'),
       result: document.getElementById('result-screen'),
     },
     hudLevel: document.getElementById('hud-level'),
@@ -50,6 +49,8 @@
     howto: document.getElementById('howto'),
     virtualPad: document.getElementById('virtual-pad'),
     padButtons: Array.from(document.querySelectorAll('#virtual-pad .pad-btn')),
+    loading: document.getElementById('loading-indicator'),
+    pauseOverlay: document.getElementById('pause-overlay'),
   };
 
   const Config = (() => {
@@ -58,6 +59,7 @@
       VERSION: '1.0.0',
       CANVAS_MIN_HEIGHT: 520,
       TILE_BASE: BASE_TILE,
+      TILE_MIN: 18,
       MAX_FRAME_PATHFIND: 3,
       VIEW_RADIUS_DEFAULT: Number(dom.sightRange.value),
       INPUT: {
@@ -551,7 +553,10 @@
     }
 
     function updateTileSize(grid) {
-      tileSize = Math.min(canvas.width / grid[0].length, canvas.height / grid.length);
+      tileSize = Math.max(
+        4,
+        Math.floor(Math.min(canvas.width / grid[0].length, canvas.height / grid.length))
+      );
     }
 
     function addParticle(tileX, tileY, color) {
@@ -606,6 +611,28 @@
         }
       }
 
+      const fogVisible = (game.fogActive && ConfigStore.get('fog')) || game.debug.fogForce;
+
+      // optional grid
+      if (game.debug.grid) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= grid[0].length; x += 1) {
+          const px = x * tileSize;
+          ctx.beginPath();
+          ctx.moveTo(px, 0);
+          ctx.lineTo(px, grid.length * tileSize);
+          ctx.stroke();
+        }
+        for (let y = 0; y <= grid.length; y += 1) {
+          const py = y * tileSize;
+          ctx.beginPath();
+          ctx.moveTo(0, py);
+          ctx.lineTo(grid[0].length * tileSize, py);
+          ctx.stroke();
+        }
+      }
+
       // draw traps
       const trapColors = {
         slow: '#00f5d4',
@@ -622,7 +649,7 @@
         noise: '音',
       };
       game.traps.forEach((trap) => {
-        if (game.fogActive && ConfigStore.get('fog') && !game.visible[trap.y][trap.x]) return;
+        if (fogVisible && !game.visible[trap.y][trap.x]) return;
         const px = trap.x * tileSize + tileSize / 2;
         const py = trap.y * tileSize + tileSize / 2;
         ctx.save();
@@ -642,7 +669,7 @@
 
       // draw items
       game.items.forEach((item) => {
-        if (game.fogActive && ConfigStore.get('fog') && !game.visible[item.y][item.x]) return;
+        if (fogVisible && !game.visible[item.y][item.x]) return;
         const px = item.x * tileSize + tileSize / 2;
         const py = item.y * tileSize + tileSize / 2;
         ctx.fillStyle = item.type === 'attack' ? '#9ef01a' : '#ffd60a';
@@ -665,7 +692,7 @@
 
       // draw enemies
       game.enemies.forEach((enemy) => {
-        if (game.fogActive && ConfigStore.get('fog') && !game.visible[enemy.tileY][enemy.tileX]) return;
+        if (fogVisible && !game.visible[enemy.tileY][enemy.tileX]) return;
         const ex = enemy.x * tileSize;
         const ey = enemy.y * tileSize;
         ctx.save();
@@ -718,7 +745,7 @@
       ctx.strokeText('私', pxPlayer, pyPlayer);
       ctx.fillText('私', pxPlayer, pyPlayer);
 
-      if (game.fogActive && ConfigStore.get('fog')) {
+      if (fogVisible) {
         ctx.fillStyle = 'rgba(5,8,12,0.8)';
         ctx.beginPath();
         ctx.rect(0, 0, canvas.width, canvas.height);
@@ -811,15 +838,17 @@
       { type: 'noise', minLevel: 5, weight: 1 },
     ];
 
-    function spawn(grid, count, start, goal, level) {
+    function spawn(grid, count, start, goal, level, blocked = []) {
       traps.length = 0;
       const h = grid.length;
       const w = grid[0].length;
       const candidates = [];
+      const blockedKey = new Set(blocked.map((b) => `${b.x},${b.y}`));
       for (let y = 1; y < h - 1; y += 1) {
         for (let x = 1; x < w - 1; x += 1) {
           if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
             if ((x + y) % 3 === 0) continue;
+            if (blockedKey.has(`${x},${y}`)) continue;
             candidates.push({ x, y });
           }
         }
@@ -884,6 +913,7 @@
       state.trapTimer = 0;
       state.trapType = null;
       state.freezeTimer = 0;
+      state.speed = Config.PLAYER.baseSpeed;
     }
 
     function update(delta, grid) {
@@ -997,6 +1027,7 @@
       for (let y = 1; y < grid.length - 1; y += 1) {
         for (let x = 1; x < grid[0].length - 1; x += 1) {
           if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
+            if (Math.abs(x - start.x) + Math.abs(y - start.y) < 5) continue;
             openCells.push({ x, y });
           }
         }
@@ -1223,76 +1254,127 @@
       time: 0,
       totalTime: 0,
       lastUpdate: Utils.now(),
+      debug: { grid: false, fogForce: false },
+      loading: false,
     };
 
     function fullVisibility(grid) {
       return grid.map((row) => row.map(() => true));
     }
 
-    function setupLevel() {
-      const size = Config.LEVEL.baseSize.w + (state.level - 1) * Config.LEVEL.sizeStep;
-      const maze = Maze.generate(size, size);
-      state.grid = maze;
-      state.start = { x: 1, y: 1 };
-      state.goal = { x: maze[0].length - 2, y: maze.length - 2 };
-      Player.reset(state.start);
-      const itemCount = Math.max(1, Math.floor(Config.LEVEL.baseItems * Math.pow(Config.LEVEL.itemDropDecay, state.level - 1)));
-      Items.spawn(maze, itemCount, state.start, state.goal);
-      const trapCount = Config.LEVEL.baseTraps + state.level;
-      Traps.spawn(maze, trapCount, state.start, state.goal, state.level);
-      const enemyCount = Math.min(Config.LEVEL.baseEnemies + state.level, Config.LEVEL.maxEnemies);
-      EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level);
-      state.fog.timer = 0;
-      state.fog.radius = Math.max(
-        3,
-        Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
-      );
-      state.noise.timer = 0;
-      state.noise.x = -1;
-      state.noise.y = -1;
-      state.fogActive = false;
-      state.visible = fullVisibility(maze);
-      state.time = 0;
+    function computeMazeSize(level) {
+      const baseW = Config.LEVEL.baseSize.w + (level - 1) * Config.LEVEL.sizeStep;
+      const baseH = Config.LEVEL.baseSize.h + (level - 1) * Config.LEVEL.sizeStep;
+      let cols = baseW;
+      let rows = baseH;
+      let tile = Math.floor(Math.min(canvas.width / cols, canvas.height / rows));
+      while (
+        tile < Config.TILE_MIN &&
+        (cols > Config.LEVEL.baseSize.w || rows > Config.LEVEL.baseSize.h)
+      ) {
+        if (cols > Config.LEVEL.baseSize.w) cols = Math.max(Config.LEVEL.baseSize.w, cols - Config.LEVEL.sizeStep);
+        if (rows > Config.LEVEL.baseSize.h) rows = Math.max(Config.LEVEL.baseSize.h, rows - Config.LEVEL.sizeStep);
+        tile = Math.floor(Math.min(canvas.width / cols, canvas.height / rows));
+      }
+      return { cols, rows };
     }
 
-    function startGame() {
+    function setupLevel() {
+      state.loading = true;
+      dom.loading.classList.remove('hidden');
+      return new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          const { cols, rows } = computeMazeSize(state.level);
+          const maze = Maze.generate(cols, rows);
+          state.grid = maze;
+          state.start = { x: 1, y: 1 };
+          state.goal = { x: maze[0].length - 2, y: maze.length - 2 };
+          Player.reset(state.start);
+          Input.setPadLabels(false);
+          const itemCount = Math.max(
+            1,
+            Math.floor(Config.LEVEL.baseItems * Math.pow(Config.LEVEL.itemDropDecay, state.level - 1))
+          );
+          Items.spawn(maze, itemCount, state.start, state.goal);
+          const trapCount = Config.LEVEL.baseTraps + state.level;
+          Traps.spawn(maze, trapCount, state.start, state.goal, state.level, Items.items);
+          const enemyCount = Math.min(Config.LEVEL.baseEnemies + state.level, Config.LEVEL.maxEnemies);
+          EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level);
+          state.fog.timer = 0;
+          state.fog.radius = Math.max(
+            3,
+            Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
+          );
+          state.noise.timer = 0;
+          state.noise.x = -1;
+          state.noise.y = -1;
+          state.fogActive = false;
+          state.visible = fullVisibility(maze);
+          state.time = 0;
+          state.loading = false;
+          dom.loading.classList.add('hidden');
+          Renderer.draw(state);
+          resolve();
+        });
+      });
+    }
+
+    async function startGame() {
       state.level = 1;
       Score.reset();
-      state.playing = true;
+      state.playing = false;
       state.paused = false;
       state.totalTime = 0;
       state.lastUpdate = Utils.now();
-      setupLevel();
-      changeScreen('game');
-      Audio.play('start');
+      dom.resultForm.classList.remove('hidden');
+      dom.pauseOverlay.classList.add('hidden');
+      dom.rankingPanel.classList.add('hidden');
+      showOverlay(null);
+      await setupLevel();
+      dom.pauseButton.disabled = false;
       dom.virtualPad.setAttribute('aria-hidden', 'false');
+      state.playing = true;
+      state.paused = false;
+      Audio.play('start');
       dom.pauseButton.textContent = '⏸ ポーズ';
     }
 
-    function nextLevel() {
+    async function nextLevel() {
+      state.playing = false;
+      state.paused = false;
       state.level += 1;
-      setupLevel();
+      dom.pauseOverlay.classList.add('hidden');
+      dom.pauseButton.disabled = true;
+      await setupLevel();
+      dom.pauseButton.disabled = false;
+      state.playing = true;
+      state.paused = false;
       Audio.play('start');
+      dom.pauseButton.textContent = '⏸ ポーズ';
     }
 
     function gameOver(win) {
       state.playing = false;
-      changeScreen('result');
+      dom.virtualPad.setAttribute('aria-hidden', 'true');
+      dom.pauseButton.disabled = true;
+      dom.pauseOverlay.classList.add('hidden');
+      showOverlay('result');
       dom.resultScore.textContent = Score.get().toString();
       dom.resultLevel.textContent = state.level.toString();
       dom.resultTime.textContent = Utils.formatTime(state.totalTime);
       dom.resultForm.classList.remove('hidden');
-      dom.virtualPad.setAttribute('aria-hidden', 'true');
       dom.pauseButton.textContent = '⏸ ポーズ';
       if (win) {
         Renderer.addParticle(state.goal.x, state.goal.y, '#fff');
       }
+      Renderer.draw(state);
     }
 
     function update() {
       const now = Utils.now();
       const delta = Math.min(0.05, now - state.lastUpdate);
       state.lastUpdate = now;
+      dom.pauseOverlay.classList.toggle('hidden', !(state.paused && state.playing));
       if (state.paused || !state.playing) return;
       state.time += delta;
       state.totalTime += delta;
@@ -1348,10 +1430,11 @@
       EnemyManager.update(delta, state.grid, state.player, { noise: state.noise });
       Renderer.updateParticles(delta);
 
-      state.visible =
-        state.fogActive && ConfigStore.get('fog')
-          ? FogOfWar.compute(state.grid, { x: state.player.tileX, y: state.player.tileY }, state.fog.radius)
-          : fullVisibility(state.grid);
+      const fogShouldRender =
+        (state.fogActive && ConfigStore.get('fog')) || state.debug.fogForce;
+      state.visible = fogShouldRender
+        ? FogOfWar.compute(state.grid, { x: state.player.tileX, y: state.player.tileY }, state.fog.radius)
+        : fullVisibility(state.grid);
 
       // check item pickup
       const item = Items.take(state.player.tileX, state.player.tileY);
@@ -1457,11 +1540,26 @@
       });
       // goal check
       if (state.player.tileX === state.goal.x && state.player.tileY === state.goal.y) {
+        state.playing = false;
         Score.addLevel(state.level, state.time);
         Audio.play('goal');
         Renderer.addParticle(state.player.tileX, state.player.tileY, '#74c69d');
         nextLevel();
       }
+    }
+
+    async function preparePreview() {
+      state.level = 1;
+      state.playing = false;
+      state.paused = false;
+      Score.reset();
+      state.totalTime = 0;
+      dom.virtualPad.setAttribute('aria-hidden', 'true');
+      dom.pauseButton.disabled = true;
+      dom.pauseButton.textContent = '⏸ ポーズ';
+      dom.pauseOverlay.classList.add('hidden');
+      await setupLevel();
+      Renderer.draw(state);
     }
 
     return {
@@ -1471,6 +1569,7 @@
       update,
       setupLevel,
       gameOver,
+      preparePreview,
     };
   })();
 
@@ -1482,12 +1581,13 @@
     }
   }
 
-  function changeScreen(name) {
-    Object.entries(dom.screens).forEach(([key, el]) => {
+  function showOverlay(name) {
+    Object.entries(dom.overlays).forEach(([key, el]) => {
+      if (!el) return;
       if (key === name) {
-        el.classList.add('active');
+        el.classList.remove('hidden');
       } else {
-        el.classList.remove('active');
+        el.classList.add('hidden');
       }
     });
   }
@@ -1553,18 +1653,21 @@
   renderLoop();
   hudLoop();
 
+  showOverlay('title');
+  GameState.preparePreview();
+
   dom.startButton.addEventListener('click', () => {
-    changeScreen('game');
     GameState.startGame();
   });
 
   dom.retryButton.addEventListener('click', () => {
-    changeScreen('game');
     GameState.startGame();
   });
 
   dom.backTitle.addEventListener('click', () => {
-    changeScreen('title');
+    showOverlay('title');
+    dom.rankingPanel.classList.add('hidden');
+    GameState.preparePreview();
   });
 
   dom.howtoBtn.addEventListener('click', () => {
@@ -1629,6 +1732,7 @@
   });
 
   dom.pauseButton.addEventListener('click', () => {
+    if (!GameState.state.playing || GameState.state.loading) return;
     GameState.state.paused = !GameState.state.paused;
     dom.pauseButton.textContent = GameState.state.paused ? '▶ 再開' : '⏸ ポーズ';
   });
@@ -1652,8 +1756,32 @@
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'p' || e.key === 'P') {
+      if (!GameState.state.playing || GameState.state.loading) return;
       GameState.state.paused = !GameState.state.paused;
       dom.pauseButton.textContent = GameState.state.paused ? '▶ 再開' : '⏸ ポーズ';
+    } else if (e.key === 'g' || e.key === 'G') {
+      GameState.state.debug.grid = !GameState.state.debug.grid;
+      Renderer.draw(GameState.state);
+    } else if (e.key === 'v' || e.key === 'V') {
+      GameState.state.debug.fogForce = !GameState.state.debug.fogForce;
+      if (GameState.state.grid.length) {
+        if (GameState.state.debug.fogForce) {
+          GameState.state.visible = FogOfWar.compute(
+            GameState.state.grid,
+            { x: GameState.state.player.tileX, y: GameState.state.player.tileY },
+            GameState.state.fog.radius
+          );
+        } else if (!GameState.state.fogActive || !ConfigStore.get('fog')) {
+          GameState.state.visible = GameState.state.grid.map((row) => row.map(() => true));
+        }
+      }
+      Renderer.draw(GameState.state);
+    } else if (e.key === 'l' || e.key === 'L') {
+      if (GameState.state.playing && !GameState.state.loading) {
+        GameState.state.playing = false;
+        Score.addLevel(GameState.state.level, GameState.state.time);
+        GameState.nextLevel();
+      }
     }
   });
 

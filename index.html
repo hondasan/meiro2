@@ -18,21 +18,7 @@
     </header>
 
     <main>
-      <section id="title-screen" class="screen active" aria-live="polite">
-        <div class="panel">
-          <h2>タイトル</h2>
-          <p>プレイヤー <span class="symbol">私</span> を操作して、<span class="symbol enemy">敵</span> を避けながらゴールを目指そう。</p>
-          <button id="start-button" class="primary">▶ はじめる</button>
-          <button id="show-howto">❔ 操作説明</button>
-          <div id="howto" class="hidden">
-            <p>PC: 矢印キー / WASD</p>
-            <p>スマホ: 画面下のDパッド、またはスワイプ</p>
-            <p>一時停止: Pキー / ⏸ボタン</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="game-screen" class="screen" aria-live="polite">
+      <section id="game-screen" aria-live="polite">
         <div class="hud">
           <div>レベル: <span id="hud-level">1</span></div>
           <div>スコア: <span id="hud-score">0</span></div>
@@ -46,6 +32,8 @@
         </div>
         <div class="canvas-wrapper">
           <canvas id="game-canvas" width="480" height="640" aria-label="迷路ゲーム"></canvas>
+          <div id="loading-indicator" class="canvas-overlay">生成中…</div>
+          <div id="pause-overlay" class="canvas-overlay hidden">ポーズ中</div>
         </div>
         <div id="virtual-pad" aria-hidden="true">
           <div class="pad-row">
@@ -59,7 +47,22 @@
         </div>
       </section>
 
-      <section id="result-screen" class="screen" aria-live="polite">
+      <section id="title-screen" class="overlay-panel" aria-live="polite">
+        <div class="panel">
+          <h2>タイトル</h2>
+          <p>プレイヤー <span class="symbol">私</span> を操作して、<span class="symbol enemy">敵</span> を避けながらゴールを目指そう。</p>
+          <button id="start-button" class="primary">▶ はじめる</button>
+          <button id="show-howto">❔ 操作説明</button>
+          <div id="howto" class="hidden">
+            <p>PC: 矢印キー / WASD</p>
+            <p>スマホ: 画面下のDパッド、またはスワイプ</p>
+            <p>一時停止: Pキー / ⏸ボタン</p>
+            <p>デバッグ: G=グリッド V=フォグ L=次レベル</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="result-screen" class="overlay-panel hidden" aria-live="polite">
         <div class="panel">
           <h2>リザルト</h2>
           <p>スコア: <span id="result-score">0</span></p>
