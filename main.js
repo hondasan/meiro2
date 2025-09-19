@@ -21,6 +21,7 @@
     statusAttack: document.querySelector('#status-attack .value'),
     statusInvincible: document.querySelector('#status-invincible .value'),
     statusTrap: document.querySelector('#status-trap .value'),
+    statusField: document.querySelector('#status-field .value'),
     resultScore: document.getElementById('result-score'),
     resultLevel: document.getElementById('result-level'),
     resultTime: document.getElementById('result-time'),
@@ -91,6 +92,11 @@
         slowDuration: 3.5,
         snareDuration: 0.45,
         reverseDuration: 4,
+        fogDuration: 6,
+        fogRadiusBase: 5,
+        fogRadiusLevelStep: 0.5,
+        noiseDuration: 4,
+        noisePullStrength: 0.65,
       },
       ENEMIES: {
         SPRINT: { id: 'sprinter', label: 'スプリンター', color: '#ff6b6b', outline: 4, speedFactor: 1.3, view: 5, pathTimer: 28 },
@@ -426,8 +432,68 @@
       return [];
     }
 
+    /**
+     * @param {number[][]} grid
+     * @param {Vec2} start
+     * @param {Vec2} end
+     * @returns {Vec2[]}
+     */
+    function aStar(grid, start, end) {
+      const h = grid.length;
+      const w = grid[0].length;
+      const open = [{ x: start.x, y: start.y }];
+      const cameFrom = new Map();
+      const gScore = Array.from({ length: h }, () => Array(w).fill(Infinity));
+      const fScore = Array.from({ length: h }, () => Array(w).fill(Infinity));
+      gScore[start.y][start.x] = 0;
+      const heuristic = (x, y) => Math.abs(x - end.x) + Math.abs(y - end.y);
+      fScore[start.y][start.x] = heuristic(start.x, start.y);
+      const dirs = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 },
+      ];
+
+      while (open.length) {
+        open.sort((a, b) => fScore[a.y][a.x] - fScore[b.y][b.x]);
+        const current = open.shift();
+        if (!current) break;
+        if (current.x === end.x && current.y === end.y) {
+          const path = [];
+          let key = `${current.x},${current.y}`;
+          while (cameFrom.has(key)) {
+            const node = key.split(',');
+            path.unshift({ x: Number(node[0]), y: Number(node[1]) });
+            const prev = cameFrom.get(key);
+            if (!prev) break;
+            key = `${prev.x},${prev.y}`;
+          }
+          return path;
+        }
+
+        for (const d of dirs) {
+          const nx = current.x + d.x;
+          const ny = current.y + d.y;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (grid[ny][nx] !== 0 && !(nx === end.x && ny === end.y)) continue;
+          const tentative = gScore[current.y][current.x] + 1;
+          if (tentative < gScore[ny][nx]) {
+            cameFrom.set(`${nx},${ny}`, { x: current.x, y: current.y });
+            gScore[ny][nx] = tentative;
+            fScore[ny][nx] = tentative + heuristic(nx, ny);
+            if (!open.some((node) => node.x === nx && node.y === ny)) {
+              open.push({ x: nx, y: ny });
+            }
+          }
+        }
+      }
+      return [];
+    }
+
     return {
       bfs,
+      aStar,
     };
   })();
 
@@ -541,20 +607,42 @@
       }
 
       // draw traps
+      const trapColors = {
+        slow: '#00f5d4',
+        snare: '#ffbe0b',
+        reverse: '#f94144',
+        fog: '#adb5ff',
+        noise: '#ff9e00',
+      };
+      const trapLabels = {
+        slow: '減',
+        snare: '拘',
+        reverse: '逆',
+        fog: '霧',
+        noise: '音',
+      };
       game.traps.forEach((trap) => {
+        if (game.fogActive && ConfigStore.get('fog') && !game.visible[trap.y][trap.x]) return;
         const px = trap.x * tileSize + tileSize / 2;
         const py = trap.y * tileSize + tileSize / 2;
-        if (!game.visible[trap.y][trap.x] && ConfigStore.get('fog')) return;
-        ctx.strokeStyle = trap.type === 'slow' ? '#00f5d4' : trap.type === 'snare' ? '#ffbe0b' : '#f94144';
-        ctx.lineWidth = 2;
+        ctx.save();
+        ctx.strokeStyle = trapColors[trap.type] || '#f94144';
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.arc(px, py, tileSize * 0.3 + Math.sin(performance.now() / 150) * 2, 0, Math.PI * 2);
+        const pulse = 1 + Math.sin(performance.now() / 180 + trap.x + trap.y) * 0.2;
+        ctx.arc(px, py, tileSize * 0.32 * pulse, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.font = `${tileSize * 0.42}px "M PLUS 1p"`;
+        ctx.fillStyle = trapColors[trap.type] || '#fff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(trapLabels[trap.type] || '罠', px, py);
+        ctx.restore();
       });
 
       // draw items
       game.items.forEach((item) => {
-        if (!game.visible[item.y][item.x] && ConfigStore.get('fog')) return;
+        if (game.fogActive && ConfigStore.get('fog') && !game.visible[item.y][item.x]) return;
         const px = item.x * tileSize + tileSize / 2;
         const py = item.y * tileSize + tileSize / 2;
         ctx.fillStyle = item.type === 'attack' ? '#9ef01a' : '#ffd60a';
@@ -577,7 +665,7 @@
 
       // draw enemies
       game.enemies.forEach((enemy) => {
-        if (!game.visible[enemy.tileY][enemy.tileX] && ConfigStore.get('fog')) return;
+        if (game.fogActive && ConfigStore.get('fog') && !game.visible[enemy.tileY][enemy.tileX]) return;
         const ex = enemy.x * tileSize;
         const ey = enemy.y * tileSize;
         ctx.save();
@@ -630,7 +718,7 @@
       ctx.strokeText('私', pxPlayer, pyPlayer);
       ctx.fillText('私', pxPlayer, pyPlayer);
 
-      if (ConfigStore.get('fog')) {
+      if (game.fogActive && ConfigStore.get('fog')) {
         ctx.fillStyle = 'rgba(5,8,12,0.8)';
         ctx.beginPath();
         ctx.rect(0, 0, canvas.width, canvas.height);
@@ -645,6 +733,15 @@
           }
         }
         ctx.globalCompositeOperation = 'source-over';
+      }
+
+      if (game.noise && game.noise.timer > 0) {
+        const radius = tileSize * (1.2 + Math.sin(performance.now() / 120) * 0.3);
+        ctx.strokeStyle = 'rgba(255, 158, 0, 0.6)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc((game.noise.x + 0.5) * tileSize, (game.noise.y + 0.5) * tileSize, radius, 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       drawParticles();
@@ -706,7 +803,13 @@
 
   const Traps = (() => {
     const traps = [];
-    const trapTypes = ['slow', 'snare', 'reverse'];
+    const definitions = [
+      { type: 'slow', minLevel: 1, weight: 3 },
+      { type: 'snare', minLevel: 1, weight: 2 },
+      { type: 'reverse', minLevel: 2, weight: 2 },
+      { type: 'fog', minLevel: 3, weight: 2 },
+      { type: 'noise', minLevel: 5, weight: 1 },
+    ];
 
     function spawn(grid, count, start, goal, level) {
       traps.length = 0;
@@ -722,12 +825,18 @@
         }
       }
       Utils.shuffle(candidates);
-      for (let i = 0; i < count && i < candidates.length; i += 1) {
-        const pool = [...trapTypes];
-        if (level >= 4) pool.push('reverse');
-        if (level >= 6) pool.push('slow');
-        if (level >= 8) pool.push('snare');
-        traps.push({ ...candidates[i], type: pool[Utils.randInt(pool.length)] });
+      const pool = [];
+      definitions
+        .filter((def) => level >= def.minLevel)
+        .forEach((def) => {
+          const weight = def.weight + Math.max(0, Math.floor((level - def.minLevel) / 3));
+          for (let i = 0; i < weight; i += 1) {
+            pool.push(def.type);
+          }
+        });
+      for (let i = 0; i < count && i < candidates.length && pool.length; i += 1) {
+        const type = pool[Utils.randInt(pool.length)];
+        traps.push({ ...candidates[i], type });
       }
     }
 
@@ -735,10 +844,19 @@
       return traps.find((trap) => trap.x === x && trap.y === y);
     }
 
+    function consume(x, y) {
+      const index = traps.findIndex((trap) => trap.x === x && trap.y === y);
+      if (index >= 0) {
+        return traps.splice(index, 1)[0];
+      }
+      return null;
+    }
+
     return {
       traps,
       spawn,
       find,
+      consume,
     };
   })();
 
@@ -802,8 +920,11 @@
       if (state.attackTimer > 0) state.attackTimer -= delta;
       if (state.invincibleTimer > 0) state.invincibleTimer -= delta;
       if (state.trapTimer > 0) {
-        state.trapTimer -= delta;
-        if (state.trapTimer <= 0) {
+        if (state.trapType !== 'fog' && state.trapType !== 'noise') {
+          state.trapTimer -= delta;
+        }
+        if (state.trapTimer <= 0.0001) {
+          state.trapTimer = 0;
           state.trapType = null;
           Input.setPadLabels(false);
         }
@@ -827,24 +948,46 @@
       { x: 0, y: -1 },
     ];
 
-    function createEnemy(type, start) {
+    function createPatrolTargets(grid, start) {
+      const targets = [];
+      dirs.forEach((dir) => {
+        let cx = start.x;
+        let cy = start.y;
+        while (grid[cy + dir.y] && grid[cy + dir.y][cx + dir.x] === 0) {
+          cx += dir.x;
+          cy += dir.y;
+        }
+        if (!(cx === start.x && cy === start.y)) {
+          targets.push({ x: cx, y: cy });
+        }
+      });
+      return targets.length ? targets : [{ x: start.x, y: start.y }];
+    }
+
+    function createEnemy(type, start, grid) {
       const base = Config.ENEMIES[type];
-      return {
+      const enemy = {
         type,
         color: base.color,
         outline: base.outline,
         speedFactor: base.speedFactor,
         view: base.view,
-        pathTimerMax: Math.max(12, base.pathTimer - difficultyLevel * 2),
+        pathTimerMax: Math.max(18, base.pathTimer - difficultyLevel * 1.5),
         pathTimer: 0,
-        x: start.x * 1 + 0.5,
-        y: start.y * 1 + 0.5,
+        x: start.x + 0.5,
+        y: start.y + 0.5,
         tileX: start.x,
         tileY: start.y,
         path: [],
-        patrolDir: Utils.randInt(dirs.length),
+        currentTarget: null,
         chaseMode: false,
+        patrolTargets: [],
+        patrolIndex: 0,
       };
+      if (type === 'PATROL') {
+        enemy.patrolTargets = createPatrolTargets(grid, start);
+      }
+      return enemy;
     }
 
     function spawn(grid, count, start, goal, level) {
@@ -867,46 +1010,108 @@
       if (level >= 8) typePool.push('PATROL', 'WANDER');
       for (let i = 0; i < count && i < openCells.length; i += 1) {
         const type = typePool[Utils.randInt(typePool.length)];
-        enemies.push(createEnemy(type, openCells[i]));
+        enemies.push(createEnemy(type, openCells[i], grid));
       }
     }
 
-    function recalcPath(enemy, grid, playerTile) {
-      const path = Pathfinding.bfs(grid, { x: enemy.tileX, y: enemy.tileY }, playerTile);
-      enemy.path = path.slice(0, Math.max(1, Math.floor(enemy.view / 2)));
+    function planPath(enemy, grid, target, useAStar) {
+      if (!target) return false;
+      const start = { x: enemy.tileX, y: enemy.tileY };
+      const path = useAStar
+        ? Pathfinding.aStar(grid, start, target)
+        : Pathfinding.bfs(grid, start, target);
+      if (path.length) {
+        enemy.path = path;
+        enemy.currentTarget = { ...target };
+        enemy.pathTimer = enemy.pathTimerMax;
+        return true;
+      }
+      return false;
     }
 
-    function update(delta, grid, player) {
+    function randomStep(enemy, grid) {
+      const options = dirs
+        .map((dir) => ({ x: enemy.tileX + dir.x, y: enemy.tileY + dir.y }))
+        .filter((pos) => grid[pos.y] && grid[pos.y][pos.x] === 0);
+      if (options.length) {
+        const pick = options[Utils.randInt(options.length)];
+        enemy.path = [{ x: pick.x, y: pick.y }];
+        enemy.currentTarget = { ...pick };
+        enemy.pathTimer = enemy.pathTimerMax * 0.5;
+      }
+    }
+
+    function update(delta, grid, player, options = {}) {
       const playerTile = { x: player.tileX, y: player.tileY };
+      const noise = options.noise || { timer: 0 };
       let pathBudget = Config.MAX_FRAME_PATHFIND;
       enemies.forEach((enemy) => {
         enemy.pathTimer -= delta * 60;
-        if (enemy.pathTimer <= 0) {
-          if (pathBudget > 0) {
-            recalcPath(enemy, grid, playerTile);
-            pathBudget -= 1;
-            enemy.pathTimer = enemy.pathTimerMax;
-          } else {
-            enemy.pathTimer = enemy.pathTimerMax / 2;
+        const noiseActive = noise.timer > 0;
+        const distance = Math.abs(enemy.tileX - playerTile.x) + Math.abs(enemy.tileY - playerTile.y);
+        let desiredTarget = null;
+        let useAStar = false;
+
+        if (noiseActive) {
+          desiredTarget = { x: noise.x, y: noise.y };
+        }
+
+        if (!desiredTarget) {
+          switch (enemy.type) {
+            case 'STRATEGY':
+              desiredTarget = playerTile;
+              useAStar = true;
+              break;
+            case 'SPRINT':
+              if (distance <= enemy.view) {
+                desiredTarget = playerTile;
+              }
+              break;
+            case 'WANDER':
+              if (distance <= enemy.view || enemy.chaseMode) {
+                enemy.chaseMode = true;
+                if (distance > enemy.view * 2 && !noiseActive) {
+                  enemy.chaseMode = false;
+                } else {
+                  desiredTarget = playerTile;
+                }
+              }
+              break;
+            case 'PATROL':
+              if (distance <= enemy.view) {
+                desiredTarget = playerTile;
+              }
+              break;
           }
         }
-        if (!enemy.path.length) {
-          const dir = dirs[enemy.patrolDir];
-          const nx = enemy.tileX + dir.x;
-          const ny = enemy.tileY + dir.y;
-          if (grid[ny] && grid[ny][nx] === 0) {
-            enemy.path.push({ x: nx, y: ny });
-          } else {
-            enemy.patrolDir = Utils.randInt(dirs.length);
+
+        if (!desiredTarget && enemy.type === 'PATROL' && enemy.patrolTargets.length) {
+          const current = enemy.patrolTargets[enemy.patrolIndex];
+          if (!enemy.currentTarget || (enemy.tileX === current.x && enemy.tileY === current.y)) {
+            enemy.patrolIndex = (enemy.patrolIndex + 1) % enemy.patrolTargets.length;
           }
+          desiredTarget = enemy.patrolTargets[enemy.patrolIndex];
         }
+
+        if (desiredTarget) {
+          const sameTarget =
+            enemy.currentTarget && enemy.currentTarget.x === desiredTarget.x && enemy.currentTarget.y === desiredTarget.y;
+          if ((!sameTarget && pathBudget > 0) || enemy.pathTimer <= 0) {
+            if (pathBudget > 0 && planPath(enemy, grid, desiredTarget, useAStar)) {
+              pathBudget -= 1;
+            }
+          }
+        } else if (!enemy.path.length || enemy.pathTimer <= 0) {
+          randomStep(enemy, grid);
+        }
+
         const target = enemy.path[0];
         if (target) {
           const dx = target.x + 0.5 - enemy.x;
           const dy = target.y + 0.5 - enemy.y;
           const len = Math.hypot(dx, dy) || 1;
           const speedBase = Config.LEVEL.baseEnemySpeed + Config.LEVEL.speedStep * (difficultyLevel - 1);
-          const speed = speedBase * enemy.speedFactor;
+          const speed = speedBase * enemy.speedFactor * (noiseActive ? 1 + Config.TRAP.noisePullStrength : 1);
           enemy.x += (dx / len) * speed * delta;
           enemy.y += (dy / len) * speed * delta;
           enemy.tileX = Math.floor(enemy.x);
@@ -923,6 +1128,7 @@
           Audio.play('hit');
         }
       });
+
       for (let i = enemies.length - 1; i >= 0; i -= 1) {
         if (enemies[i].dead) {
           enemies.splice(i, 1);
@@ -1011,10 +1217,17 @@
       traps: Traps.traps,
       player: Player.state,
       visible: [],
+      fog: { timer: 0, radius: Config.TRAP.fogRadiusBase },
+      noise: { timer: 0, x: 0, y: 0 },
+      fogActive: false,
       time: 0,
       totalTime: 0,
       lastUpdate: Utils.now(),
     };
+
+    function fullVisibility(grid) {
+      return grid.map((row) => row.map(() => true));
+    }
 
     function setupLevel() {
       const size = Config.LEVEL.baseSize.w + (state.level - 1) * Config.LEVEL.sizeStep;
@@ -1029,7 +1242,16 @@
       Traps.spawn(maze, trapCount, state.start, state.goal, state.level);
       const enemyCount = Math.min(Config.LEVEL.baseEnemies + state.level, Config.LEVEL.maxEnemies);
       EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level);
-      state.visible = FogOfWar.compute(maze, state.start, ConfigStore.get('viewRadius'));
+      state.fog.timer = 0;
+      state.fog.radius = Math.max(
+        3,
+        Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
+      );
+      state.noise.timer = 0;
+      state.noise.x = -1;
+      state.noise.y = -1;
+      state.fogActive = false;
+      state.visible = fullVisibility(maze);
       state.time = 0;
     }
 
@@ -1075,9 +1297,61 @@
       state.time += delta;
       state.totalTime += delta;
       Player.update(delta, state.grid);
-      EnemyManager.update(delta, state.grid, state.player);
+
+      if (state.player.invincibleTimer > 0) {
+        if (state.player.trapTimer > 0 || state.player.trapType) {
+          state.player.trapTimer = 0;
+          state.player.trapType = null;
+          Input.setPadLabels(false);
+        }
+        state.fog.timer = 0;
+        state.noise.timer = 0;
+        state.noise.x = -1;
+        state.noise.y = -1;
+      }
+
+      if (state.fog.timer > 0) {
+        state.fog.timer = Math.max(0, state.fog.timer - delta);
+        state.fogActive = true;
+        if (state.player.trapType === 'fog') {
+          state.player.trapTimer = state.fog.timer;
+          if (state.fog.timer <= 0) {
+            state.player.trapType = null;
+            state.player.trapTimer = 0;
+          }
+        }
+        if (state.fog.timer <= 0) {
+          state.fogActive = false;
+        }
+      } else {
+        state.fogActive = false;
+      }
+
+      if (state.noise.timer > 0) {
+        state.noise.timer = Math.max(0, state.noise.timer - delta);
+        if (state.player.trapType === 'noise') {
+          state.player.trapTimer = state.noise.timer;
+          if (state.noise.timer <= 0) {
+            state.player.trapType = null;
+            state.player.trapTimer = 0;
+            state.noise.x = -1;
+            state.noise.y = -1;
+          }
+        }
+      } else if (state.player.trapType === 'noise') {
+        state.player.trapType = null;
+        state.player.trapTimer = 0;
+        state.noise.x = -1;
+        state.noise.y = -1;
+      }
+
+      EnemyManager.update(delta, state.grid, state.player, { noise: state.noise });
       Renderer.updateParticles(delta);
-      state.visible = FogOfWar.compute(state.grid, { x: state.player.tileX, y: state.player.tileY }, ConfigStore.get('viewRadius'));
+
+      state.visible =
+        state.fogActive && ConfigStore.get('fog')
+          ? FogOfWar.compute(state.grid, { x: state.player.tileX, y: state.player.tileY }, state.fog.radius)
+          : fullVisibility(state.grid);
 
       // check item pickup
       const item = Items.take(state.player.tileX, state.player.tileY);
@@ -1097,29 +1371,67 @@
 
       // check traps
       const trap = Traps.find(state.player.tileX, state.player.tileY);
-      if (trap && state.player.invincibleTimer <= 0 && state.player.trapTimer <= 0) {
+      if (trap && state.player.invincibleTimer <= 0) {
         const trapIntensity = 1 + Math.min(0.5, (state.level - 1) * 0.05);
+        let activated = false;
         switch (trap.type) {
           case 'slow':
-            state.player.trapType = 'slow';
-            state.player.trapTimer = Config.TRAP.slowDuration * trapIntensity;
+            if (state.player.trapTimer <= 0) {
+              state.player.trapType = 'slow';
+              state.player.trapTimer = Config.TRAP.slowDuration * trapIntensity;
+              activated = true;
+            }
             break;
           case 'snare':
-            state.player.freezeTimer = Config.TRAP.snareDuration * trapIntensity;
-            state.player.trapType = 'snare';
-            state.player.trapTimer = Config.TRAP.snareDuration * trapIntensity;
+            if (state.player.trapTimer <= 0) {
+              state.player.freezeTimer = Config.TRAP.snareDuration * trapIntensity;
+              state.player.trapType = 'snare';
+              state.player.trapTimer = Config.TRAP.snareDuration * trapIntensity;
+              activated = true;
+            }
             break;
           case 'reverse':
-            state.player.trapType = 'reverse';
-            state.player.trapTimer = Config.TRAP.reverseDuration * trapIntensity;
-            Input.setPadLabels(true);
-            setTimeout(() => Input.setPadLabels(false), Config.TRAP.reverseDuration * trapIntensity * 1000);
+            if (state.player.trapTimer <= 0) {
+              state.player.trapType = 'reverse';
+              state.player.trapTimer = Config.TRAP.reverseDuration * trapIntensity;
+              Input.setPadLabels(true);
+              activated = true;
+            }
+            break;
+          case 'fog':
+            state.fog.timer = Config.TRAP.fogDuration * trapIntensity;
+            state.fog.radius = Math.max(
+              3,
+              Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
+            );
+            state.player.trapType = 'fog';
+            state.player.trapTimer = state.fog.timer;
+            state.fogActive = true;
+            activated = true;
+            break;
+          case 'noise':
+            state.noise.timer = Config.TRAP.noiseDuration * trapIntensity;
+            state.noise.x = trap.x;
+            state.noise.y = trap.y;
+            state.player.trapType = 'noise';
+            state.player.trapTimer = state.noise.timer;
+            activated = true;
             break;
         }
-        if (ConfigStore.get('vibration') && navigator.vibrate) navigator.vibrate([60, 20, 60]);
-        Audio.play('trap');
-        Renderer.setShake(5);
-        Renderer.addParticle(state.player.tileX, state.player.tileY, '#f94144');
+        if (activated) {
+          Traps.consume(state.player.tileX, state.player.tileY);
+          if (ConfigStore.get('vibration') && navigator.vibrate) navigator.vibrate([60, 20, 60]);
+          Audio.play('trap');
+          const colorMap = {
+            slow: '#00f5d4',
+            snare: '#ffbe0b',
+            reverse: '#f94144',
+            fog: '#adb5ff',
+            noise: '#ff9e00',
+          };
+          Renderer.setShake(trap.type === 'fog' ? 3 : trap.type === 'noise' ? 4 : 5);
+          Renderer.addParticle(state.player.tileX, state.player.tileY, colorMap[trap.type] || '#f94144');
+        }
       }
 
       if (state.player.invincibleTimer > 0 && state.player.trapType === 'snare') {
@@ -1206,10 +1518,23 @@
       slow: '減速',
       snare: '拘束',
       reverse: '逆操作',
+      fog: '霧',
+      noise: 'ノイズ',
     };
     dom.statusAttack.textContent = player.attackTimer > 0 ? `${player.attackTimer.toFixed(1)}s` : '-';
     dom.statusInvincible.textContent = player.invincibleTimer > 0 ? `${player.invincibleTimer.toFixed(1)}s` : '-';
-    dom.statusTrap.textContent = player.trapTimer > 0 ? `${trapLabelMap[player.trapType] || ''} ${player.trapTimer.toFixed(1)}s` : '-';
+    dom.statusTrap.textContent =
+      player.trapTimer > 0 && player.trapType
+        ? `${trapLabelMap[player.trapType] || ''} ${player.trapTimer.toFixed(1)}s`
+        : '-';
+    const fieldStatuses = [];
+    if (GameState.state.fog.timer > 0 && ConfigStore.get('fog')) {
+      fieldStatuses.push(`フォグ ${GameState.state.fog.timer.toFixed(1)}s`);
+    }
+    if (GameState.state.noise.timer > 0) {
+      fieldStatuses.push(`ノイズ ${GameState.state.noise.timer.toFixed(1)}s`);
+    }
+    dom.statusField.textContent = fieldStatuses.length ? fieldStatuses.join(' / ') : '-';
   }
 
   function hudLoop() {
@@ -1253,9 +1578,9 @@
 
   dom.resetRanking.addEventListener('click', () => {
     if (confirm('ランキングを初期化しますか？')) {
-    Ranking.reset();
-    renderRanking();
-  }
+      Ranking.reset();
+      renderRanking();
+    }
   });
 
   dom.closeRanking.addEventListener('click', () => {
@@ -1277,7 +1602,14 @@
   });
 
   dom.sightRange.addEventListener('input', () => {
-    ConfigStore.set('viewRadius', Number(dom.sightRange.value));
+    const value = Number(dom.sightRange.value);
+    ConfigStore.set('viewRadius', value);
+    if (GameState.state.fogActive) {
+      GameState.state.fog.radius = Math.max(
+        3,
+        Math.floor(value - (GameState.state.level - 1) * Config.TRAP.fogRadiusLevelStep)
+      );
+    }
   });
   dom.padSize.addEventListener('input', () => {
     ConfigStore.set('padSize', Number(dom.padSize.value));
