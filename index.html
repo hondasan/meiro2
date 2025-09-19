@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" />
+  <title>迷路アクション 私と敵</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top-bar">
+      <h1 class="game-title">迷路アクション 私と敵</h1>
+      <div class="top-controls">
+        <button id="toggle-sound" aria-pressed="false">🔊 音ON</button>
+        <button id="open-settings">⚙️ 設定</button>
+        <button id="open-ranking">🏆 ランキング</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="title-screen" class="screen active" aria-live="polite">
+        <div class="panel">
+          <h2>タイトル</h2>
+          <p>プレイヤー <span class="symbol">私</span> を操作して、<span class="symbol enemy">敵</span> を避けながらゴールを目指そう。</p>
+          <button id="start-button" class="primary">▶ はじめる</button>
+          <button id="show-howto">❔ 操作説明</button>
+          <div id="howto" class="hidden">
+            <p>PC: 矢印キー / WASD</p>
+            <p>スマホ: 画面下のDパッド、またはスワイプ</p>
+            <p>一時停止: Pキー / ⏸ボタン</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="game-screen" class="screen" aria-live="polite">
+        <div class="hud">
+          <div>レベル: <span id="hud-level">1</span></div>
+          <div>スコア: <span id="hud-score">0</span></div>
+          <div class="status-strip">
+            <span id="status-attack" class="status">攻撃: <span class="value">-</span></span>
+            <span id="status-invincible" class="status">無敵: <span class="value">-</span></span>
+            <span id="status-trap" class="status">罠効果: <span class="value">-</span></span>
+          </div>
+          <button id="pause-button">⏸ ポーズ</button>
+        </div>
+        <div class="canvas-wrapper">
+          <canvas id="game-canvas" width="480" height="640" aria-label="迷路ゲーム"></canvas>
+        </div>
+        <div id="virtual-pad" aria-hidden="true">
+          <div class="pad-row">
+            <button data-dir="up" class="pad-btn" aria-label="上">▲</button>
+          </div>
+          <div class="pad-row">
+            <button data-dir="left" class="pad-btn" aria-label="左">◀</button>
+            <button data-dir="down" class="pad-btn" aria-label="下">▼</button>
+            <button data-dir="right" class="pad-btn" aria-label="右">▶</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="result-screen" class="screen" aria-live="polite">
+        <div class="panel">
+          <h2>リザルト</h2>
+          <p>スコア: <span id="result-score">0</span></p>
+          <p>到達レベル: <span id="result-level">1</span></p>
+          <p>クリアタイム: <span id="result-time">0.0</span>s</p>
+          <form id="result-form">
+            <label>イニシャル (3文字)
+              <input id="initial-input" maxlength="3" pattern="[A-Za-zぁ-んァ-ヶ一-龥0-9]{1,3}" required />
+            </label>
+            <button type="submit" class="primary">保存</button>
+          </form>
+          <button id="retry-button">▶ もう一度</button>
+          <button id="back-title">◀ タイトルへ</button>
+        </div>
+      </section>
+
+      <section id="ranking-panel" class="dialog hidden" role="dialog" aria-modal="true">
+        <div class="panel">
+          <h2>ランキング</h2>
+          <ol id="ranking-list"></ol>
+          <button id="reset-ranking">初期化</button>
+          <button id="close-ranking" class="secondary">閉じる</button>
+        </div>
+      </section>
+
+      <section id="settings-panel" class="dialog hidden" role="dialog" aria-modal="true">
+        <div class="panel">
+          <h2>設定</h2>
+          <label>視界半径: <input id="sight-range" type="range" min="3" max="10" value="5" /></label>
+          <label>Dパッドサイズ: <input id="pad-size" type="range" min="80" max="200" value="140" /></label>
+          <label>スワイプ感度: <input id="swipe-sensitivity" type="range" min="10" max="80" value="30" /></label>
+          <label>震動: <input id="vibration-toggle" type="checkbox" checked /></label>
+          <label>画面揺れ: <input id="screenshake-toggle" type="checkbox" checked /></label>
+          <label>フォグ表示: <input id="fog-toggle" type="checkbox" checked /></label>
+          <button id="close-settings" class="secondary">閉じる</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
