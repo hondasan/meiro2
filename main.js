@@ -15,12 +15,15 @@
       title: document.getElementById('title-screen'),
       result: document.getElementById('result-screen'),
     },
+    touchLayer: document.getElementById('touch-layer'),
     hudLevel: document.getElementById('hud-level'),
     hudScore: document.getElementById('hud-score'),
     statusAttack: document.querySelector('#status-attack .value'),
     statusInvincible: document.querySelector('#status-invincible .value'),
     statusTrap: document.querySelector('#status-trap .value'),
     statusField: document.querySelector('#status-field .value'),
+    statusDash: document.querySelector('#status-dash .value'),
+    statusSmoke: document.querySelector('#status-smoke .value'),
     resultScore: document.getElementById('result-score'),
     resultLevel: document.getElementById('result-level'),
     resultTime: document.getElementById('result-time'),
@@ -49,8 +52,13 @@
     howto: document.getElementById('howto'),
     virtualPad: document.getElementById('virtual-pad'),
     padButtons: Array.from(document.querySelectorAll('#virtual-pad .pad-btn')),
+    padToggle: document.getElementById('pad-toggle'),
+    dashButton: document.getElementById('dash-button'),
+    smokeButton: document.getElementById('smoke-button'),
     loading: document.getElementById('loading-indicator'),
     pauseOverlay: document.getElementById('pause-overlay'),
+    tutorial: document.getElementById('tutorial-pop'),
+    tutorialClose: document.getElementById('tutorial-close'),
   };
 
   const Config = (() => {
@@ -65,6 +73,16 @@
       INPUT: {
         swipeSensitivity: Number(dom.swipeSensitivity.value),
         padSize: Number(dom.padSize.value),
+      },
+      MAZE: {
+        braidMin: 0.25,
+        braidMax: 0.45,
+        minJunctionRatio: 0.12,
+        roomCount: 2,
+        roomSize: { min: 3, max: 5 },
+        widenThreshold: 10,
+        widenChance: 0.4,
+        alternativeMaxTries: 40,
       },
       AUDIO: {
         masterVolume: 0.4,
@@ -85,10 +103,15 @@
         slowFactor: 0.45,
         freezeDuration: 0.5,
         reverseDuration: 4,
+        dashCooldown: 3,
+        dashDuration: 0.35,
+        dashMultiplier: 2,
+        smokeDuration: 2,
       },
       ITEM: {
         attackDuration: 6,
         invincibleDuration: 5,
+        smokeChance: 0.2,
       },
       TRAP: {
         slowDuration: 3.5,
@@ -105,6 +128,17 @@
         STRATEGY: { id: 'strategist', label: 'ストラテジスト', color: '#f9c74f', outline: 2, speedFactor: 1.0, view: 9, pathTimer: 20 },
         WANDER: { id: 'wanderer', label: 'ワンダラー', color: '#4cc9f0', outline: 3, speedFactor: 0.9, view: 6, pathTimer: 45 },
         PATROL: { id: 'patroller', label: 'パトローラー', color: '#b5179e', outline: 2, speedFactor: 1.05, view: 7, pathTimer: 35 },
+      },
+      ENEMY_BEHAVIOR: {
+        chaseGrace: 2,
+        pathIntervalMin: 0.22,
+        pathIntervalMax: 0.42,
+        leashDistance: 80,
+        closeDistanceSlow: 2,
+        closeSpeedFactor: 0.8,
+        densityZone: 6,
+        densityLimit: 2,
+        densityCooldown: 5,
       },
       SCORE: {
         base: 1000,
@@ -246,6 +280,13 @@
     const keys = new Set();
     let swipeStart = null;
     let gamepadDir = null;
+    let swipeDir = null;
+    let swipeSteps = 0;
+    let dashRequested = false;
+    let smokeRequested = false;
+    let padState = 'full';
+    let longPressTimer = null;
+    let dragData = null;
 
     function updatePadSize() {
       const size = ConfigStore.get('padSize');
@@ -255,60 +296,171 @@
       });
     }
 
+    function setPadState(state) {
+      padState = state;
+      dom.virtualPad.dataset.state = state;
+      dom.padToggle.dataset.state = state;
+      const hidden = state === 'hidden';
+      dom.virtualPad.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    }
+
+    function cyclePadState() {
+      const order = ['full', 'compact', 'hidden'];
+      const idx = order.indexOf(padState);
+      const next = order[(idx + 1) % order.length];
+      setPadState(next);
+    }
+
+    function handlePadPress(dir) {
+      gamepadDir = dir;
+    }
+
+    function clearPadPress() {
+      gamepadDir = null;
+    }
+
     dom.padButtons.forEach((btn) => {
-      btn.addEventListener('touchstart', (e) => {
+      btn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
-        gamepadDir = btn.dataset.dir;
+        handlePadPress(btn.dataset.dir);
       });
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        gamepadDir = null;
-      });
-      btn.addEventListener('touchcancel', () => {
-        gamepadDir = null;
-      });
-      btn.addEventListener('mousedown', () => {
-        gamepadDir = btn.dataset.dir;
-      });
-      btn.addEventListener('mouseup', () => {
-        gamepadDir = null;
-      });
-      btn.addEventListener('mouseleave', () => {
-        gamepadDir = null;
-      });
+      btn.addEventListener('pointerup', clearPadPress);
+      btn.addEventListener('pointercancel', clearPadPress);
+      btn.addEventListener('pointerleave', clearPadPress);
+      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    });
+
+    function requestDash() {
+      dashRequested = true;
+    }
+
+    function requestSmoke() {
+      smokeRequested = true;
+    }
+
+    dom.dashButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      requestDash();
+    });
+    dom.smokeButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      requestSmoke();
     });
 
     window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) {
+      const key = e.key.toLowerCase();
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(key)) {
         e.preventDefault();
       }
-      keys.add(e.key.toLowerCase());
+      if (key === ' ') {
+        e.preventDefault();
+        requestDash();
+      } else if (key === 'e') {
+        requestSmoke();
+      }
+      keys.add(key);
     });
     window.addEventListener('keyup', (e) => {
       keys.delete(e.key.toLowerCase());
     });
 
-    canvas.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) {
-        swipeStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      }
+    function triggerSwipe(dir) {
+      swipeDir = dir;
+      swipeSteps = 1;
+    }
+
+    dom.touchLayer.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+      swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      dom.touchLayer.setPointerCapture(e.pointerId);
     });
-    canvas.addEventListener('touchend', (e) => {
-      if (swipeStart && e.changedTouches.length === 1) {
-        const dx = e.changedTouches[0].clientX - swipeStart.x;
-        const dy = e.changedTouches[0].clientY - swipeStart.y;
-        const sens = ConfigStore.get('swipeSensitivity');
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > sens) {
-          gamepadDir = dx > 0 ? 'right' : 'left';
-        } else if (Math.abs(dy) > sens) {
-          gamepadDir = dy > 0 ? 'down' : 'up';
-        }
-        setTimeout(() => {
-          gamepadDir = null;
-        }, 100);
+    dom.touchLayer.addEventListener('pointerup', (e) => {
+      if (!swipeStart || swipeStart.id !== e.pointerId) return;
+      const dx = e.clientX - swipeStart.x;
+      const dy = e.clientY - swipeStart.y;
+      const sens = ConfigStore.get('swipeSensitivity');
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > sens) {
+        triggerSwipe(dx > 0 ? 'right' : 'left');
+      } else if (Math.abs(dy) > sens) {
+        triggerSwipe(dy > 0 ? 'down' : 'up');
+      }
+      dom.touchLayer.releasePointerCapture(e.pointerId);
+      swipeStart = null;
+    });
+    dom.touchLayer.addEventListener('pointercancel', (e) => {
+      if (swipeStart && swipeStart.id === e.pointerId) {
+        dom.touchLayer.releasePointerCapture(e.pointerId);
       }
       swipeStart = null;
     });
+
+    dom.padToggle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      dom.padToggle.setPointerCapture(e.pointerId);
+      longPressTimer = window.setTimeout(() => {
+        const rect = dom.padToggle.getBoundingClientRect();
+        dragData = {
+          id: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          left: rect.left,
+          top: rect.top,
+        };
+        dom.padToggle.classList.add('dragging');
+      }, 300);
+    });
+
+    function endDrag(pointerId, asClick) {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      if (dragData && dragData.id === pointerId) {
+        dragData = null;
+        dom.padToggle.classList.remove('dragging');
+      } else if (asClick) {
+        cyclePadState();
+      }
+    }
+
+    dom.padToggle.addEventListener('pointermove', (e) => {
+      if (!dragData || dragData.id !== e.pointerId) return;
+      const dx = e.clientX - dragData.startX;
+      const dy = e.clientY - dragData.startY;
+      const maxLeft = window.innerWidth - dom.padToggle.offsetWidth - 8;
+      const maxTop = window.innerHeight - dom.padToggle.offsetHeight - 8;
+      const newLeft = Math.max(8, Math.min(maxLeft, dragData.left + dx));
+      const newTop = Math.max(8, Math.min(maxTop, dragData.top + dy));
+      dom.padToggle.style.left = `${newLeft}px`;
+      dom.padToggle.style.top = `${newTop}px`;
+      dom.padToggle.style.right = 'auto';
+      dom.padToggle.style.bottom = 'auto';
+    });
+
+    dom.padToggle.addEventListener('pointerup', (e) => {
+      dom.padToggle.releasePointerCapture(e.pointerId);
+      const wasDragging = Boolean(dragData && dragData.id === e.pointerId);
+      endDrag(e.pointerId, !wasDragging);
+    });
+    dom.padToggle.addEventListener('pointercancel', (e) => {
+      dom.padToggle.releasePointerCapture(e.pointerId);
+      endDrag(e.pointerId, false);
+    });
+
+    function resolveDirection(dir) {
+      switch (dir) {
+        case 'up':
+          return { x: 0, y: -1 };
+        case 'down':
+          return { x: 0, y: 1 };
+        case 'left':
+          return { x: -1, y: 0 };
+        case 'right':
+          return { x: 1, y: 0 };
+        default:
+          return { x: 0, y: 0 };
+      }
+    }
 
     function getDirection(reverse) {
       let horizontal = 0;
@@ -318,13 +470,17 @@
       if (keys.has('arrowleft') || keys.has('a')) horizontal -= 1;
       if (keys.has('arrowright') || keys.has('d')) horizontal += 1;
       if (gamepadDir) {
-        switch (gamepadDir) {
-          case 'up': vertical -= 1; break;
-          case 'down': vertical += 1; break;
-          case 'left': horizontal -= 1; break;
-          case 'right': horizontal += 1; break;
-        }
+        const { x, y } = resolveDirection(gamepadDir);
+        horizontal += x;
+        vertical += y;
       }
+      if (swipeSteps > 0 && swipeDir) {
+        const { x, y } = resolveDirection(swipeDir);
+        horizontal += x;
+        vertical += y;
+      }
+      horizontal = Math.max(-1, Math.min(1, horizontal));
+      vertical = Math.max(-1, Math.min(1, vertical));
       if (reverse) {
         horizontal *= -1;
         vertical *= -1;
@@ -332,7 +488,29 @@
       return { x: horizontal, y: vertical };
     }
 
+    function notifyStep() {
+      if (swipeSteps > 0) {
+        swipeSteps -= 1;
+        if (swipeSteps <= 0) {
+          swipeDir = null;
+        }
+      }
+    }
+
+    function consumeDash() {
+      const result = dashRequested;
+      dashRequested = false;
+      return result;
+    }
+
+    function consumeSmoke() {
+      const result = smokeRequested;
+      smokeRequested = false;
+      return result;
+    }
+
     updatePadSize();
+    setPadState('full');
 
     return {
       getDirection,
@@ -348,16 +526,25 @@
           }
         });
       },
+      notifyStep,
+      consumeDash,
+      consumeSmoke,
+      setPadState,
+      getPadState: () => padState,
     };
   })();
 
   const Maze = (() => {
-    /**
-     * @param {number} width odd
-     * @param {number} height odd
-     * @returns {number[][]}
-     */
-    function generate(width, height, seed = null) {
+    const DIRS = [
+      { x: 1, y: 0 },
+      { x: -1, y: 0 },
+      { x: 0, y: 1 },
+      { x: 0, y: -1 },
+    ];
+
+    let lastMetadata = { rooms: [], widened: [], junctions: [] };
+
+    function baseGenerate(width, height) {
       const w = width % 2 === 0 ? width + 1 : width;
       const h = height % 2 === 0 ? height + 1 : height;
       const maze = Array.from({ length: h }, () => Array(w).fill(1));
@@ -366,35 +553,376 @@
       const startY = 1;
       maze[startY][startX] = 0;
       stack.push({ x: startX, y: startY });
-
-      const dir = [
-        { x: 0, y: -2 },
-        { x: 0, y: 2 },
-        { x: -2, y: 0 },
-        { x: 2, y: 0 },
-      ];
+      const stepDirs = DIRS.map((d) => ({ x: d.x * 2, y: d.y * 2 }));
 
       while (stack.length) {
         const current = stack[stack.length - 1];
-        const candidates = dir
+        const candidates = stepDirs
           .map((d) => ({ x: current.x + d.x, y: current.y + d.y, midX: current.x + d.x / 2, midY: current.y + d.y / 2 }))
-          .filter((cell) => cell.x > 0 && cell.y > 0 && cell.x < w - 1 && cell.y < h - 1 && maze[cell.y][cell.x] === 1);
-        if (candidates.length === 0) {
+          .filter(
+            (cell) =>
+              cell.x > 0 &&
+              cell.y > 0 &&
+              cell.x < w - 1 &&
+              cell.y < h - 1 &&
+              maze[cell.y][cell.x] === 1
+          );
+        if (!candidates.length) {
           stack.pop();
-        } else {
-          const next = candidates[Math.floor(Math.random() * candidates.length)];
-          maze[next.midY][next.midX] = 0;
-          maze[next.y][next.x] = 0;
-          stack.push({ x: next.x, y: next.y });
+          continue;
         }
+        const next = candidates[Utils.randInt(candidates.length)];
+        maze[next.midY][next.midX] = 0;
+        maze[next.y][next.x] = 0;
+        stack.push({ x: next.x, y: next.y });
       }
-
       maze[h - 2][w - 2] = 0;
       return maze;
     }
 
+    function inBounds(grid, x, y) {
+      return y >= 0 && y < grid.length && x >= 0 && x < grid[0].length;
+    }
+
+    function countOpenNeighbors(grid, x, y) {
+      return DIRS.reduce((acc, d) => (grid[y + d.y] && grid[y + d.y][x + d.x] === 0 ? acc + 1 : acc), 0);
+    }
+
+    function getOpenNeighbors(grid, x, y) {
+      return DIRS.filter((d) => inBounds(grid, x + d.x, y + d.y) && grid[y + d.y][x + d.x] === 0).map((d) => ({
+        x: x + d.x,
+        y: y + d.y,
+      }));
+    }
+
+    function carveRoom(grid, x, y, width, height, rooms) {
+      const tiles = [];
+      for (let ry = y; ry < y + height; ry += 1) {
+        for (let rx = x; rx < x + width; rx += 1) {
+          if (ry <= 0 || ry >= grid.length - 1 || rx <= 0 || rx >= grid[0].length - 1) continue;
+          grid[ry][rx] = 0;
+          tiles.push({ x: rx, y: ry });
+        }
+      }
+      if (!tiles.length) return null;
+      const center = tiles[Math.floor(tiles.length / 2)];
+      const room = { tiles, center };
+      rooms.push(room);
+      return room;
+    }
+
+    function connectRoom(grid, room) {
+      if (!room) return;
+      const perimeter = [];
+      room.tiles.forEach((tile) => {
+        DIRS.forEach((d) => {
+          const nx = tile.x + d.x;
+          const ny = tile.y + d.y;
+          if (!inBounds(grid, nx, ny)) return;
+          if (grid[ny][nx] === 1) {
+            perimeter.push({ x: tile.x, y: tile.y, dir: d });
+          }
+        });
+      });
+      Utils.shuffle(perimeter);
+      const doors = Math.max(2, Math.min(4, Math.floor(perimeter.length / 6) + 1));
+      let created = 0;
+      for (const cell of perimeter) {
+        if (created >= doors) break;
+        let cx = cell.x;
+        let cy = cell.y;
+        let depth = 0;
+        while (depth < 6) {
+          cx += cell.dir.x;
+          cy += cell.dir.y;
+          if (!inBounds(grid, cx, cy)) break;
+          if (grid[cy][cx] === 0) {
+            created += 1;
+            break;
+          }
+          grid[cy][cx] = 0;
+          depth += 1;
+        }
+      }
+    }
+
+    function addRooms(grid, start, goal, rooms) {
+      const attempts = Math.max(Config.MAZE.roomCount, 2) * 3;
+      let created = 0;
+      for (let i = 0; i < attempts && created < Config.MAZE.roomCount; i += 1) {
+        const rw = Utils.randInt(Config.MAZE.roomSize.max - Config.MAZE.roomSize.min + 1) + Config.MAZE.roomSize.min;
+        const rh = Utils.randInt(Config.MAZE.roomSize.max - Config.MAZE.roomSize.min + 1) + Config.MAZE.roomSize.min;
+        const rx = Utils.randInt(grid[0].length - rw - 2) + 1;
+        const ry = Utils.randInt(grid.length - rh - 2) + 1;
+        if (
+          (rx <= start.x && start.x <= rx + rw && ry <= start.y && start.y <= ry + rh) ||
+          (rx <= goal.x && goal.x <= rx + rw && ry <= goal.y && goal.y <= ry + rh)
+        ) {
+          continue;
+        }
+        let blocked = false;
+        for (let y = ry - 1; y < ry + rh + 1 && !blocked; y += 1) {
+          for (let x = rx - 1; x < rx + rw + 1; x += 1) {
+            if (!inBounds(grid, x, y)) {
+              blocked = true;
+              break;
+            }
+            if (grid[y][x] === 0) {
+              blocked = true;
+              break;
+            }
+          }
+        }
+        if (blocked) continue;
+        const room = carveRoom(grid, rx, ry, rw, rh, rooms);
+        if (room) {
+          connectRoom(grid, room);
+          created += 1;
+        }
+      }
+    }
+
+    function getDeadEnds(grid) {
+      const ends = [];
+      for (let y = 1; y < grid.length - 1; y += 1) {
+        for (let x = 1; x < grid[0].length - 1; x += 1) {
+          if (grid[y][x] === 0 && countOpenNeighbors(grid, x, y) === 1) {
+            ends.push({ x, y });
+          }
+        }
+      }
+      return ends;
+    }
+
+    function braid(grid) {
+      const deadEnds = getDeadEnds(grid);
+      if (!deadEnds.length) return;
+      const ratio = Utils.randRange(Config.MAZE.braidMin, Config.MAZE.braidMax);
+      const target = Math.floor(deadEnds.length * ratio);
+      Utils.shuffle(deadEnds);
+      for (let i = 0; i < target; i += 1) {
+        const cell = deadEnds[i];
+        const candidates = DIRS.filter((d) => {
+          const wallX = cell.x + d.x;
+          const wallY = cell.y + d.y;
+          const beyondX = cell.x + d.x * 2;
+          const beyondY = cell.y + d.y * 2;
+          return (
+            inBounds(grid, wallX, wallY) &&
+            inBounds(grid, beyondX, beyondY) &&
+            grid[wallY][wallX] === 1 &&
+            grid[beyondY][beyondX] === 0
+          );
+        });
+        if (!candidates.length) continue;
+        const pick = candidates[Utils.randInt(candidates.length)];
+        grid[cell.y + pick.y][cell.x + pick.x] = 0;
+      }
+    }
+
+    function ensureJunctionDensity(grid) {
+      const flat = [];
+      for (let y = 1; y < grid.length - 1; y += 1) {
+        for (let x = 1; x < grid[0].length - 1; x += 1) {
+          if (grid[y][x] === 0) flat.push({ x, y });
+        }
+      }
+      const targetRatio = Config.MAZE.minJunctionRatio;
+      let junctions = flat.filter((cell) => countOpenNeighbors(grid, cell.x, cell.y) >= 3).length;
+      let attempts = 0;
+      while (flat.length && junctions / flat.length < targetRatio && attempts < flat.length * 4) {
+        attempts += 1;
+        const cell = flat[Utils.randInt(flat.length)];
+        const dirs = DIRS.filter((d) => {
+          const wallX = cell.x + d.x;
+          const wallY = cell.y + d.y;
+          const beyondX = cell.x + d.x * 2;
+          const beyondY = cell.y + d.y * 2;
+          return (
+            inBounds(grid, wallX, wallY) &&
+            inBounds(grid, beyondX, beyondY) &&
+            grid[wallY][wallX] === 1 &&
+            grid[beyondY][beyondX] === 0
+          );
+        });
+        if (!dirs.length) continue;
+        const pick = dirs[Utils.randInt(dirs.length)];
+        grid[cell.y + pick.y][cell.x + pick.x] = 0;
+        junctions = flat.filter((c) => countOpenNeighbors(grid, c.x, c.y) >= 3).length;
+      }
+    }
+
+    function widenCorridors(grid, widened) {
+      const visited = new Set();
+      const key = (x, y) => `${x},${y}`;
+      for (let y = 1; y < grid.length - 1; y += 1) {
+        for (let x = 1; x < grid[0].length - 1; x += 1) {
+          if (grid[y][x] !== 0) continue;
+          if (visited.has(key(x, y))) continue;
+          const neighbors = getOpenNeighbors(grid, x, y);
+          if (neighbors.length !== 2) continue;
+          const dirA = { x: neighbors[0].x - x, y: neighbors[0].y - y };
+          const dirB = { x: neighbors[1].x - x, y: neighbors[1].y - y };
+          if (!(dirA.x === -dirB.x && dirA.y === -dirB.y)) continue;
+          const dir = { x: Math.sign(dirA.x), y: Math.sign(dirA.y) };
+          const segment = [];
+          const explore = (sx, sy, dx, dy) => {
+            let cx = sx;
+            let cy = sy;
+            while (true) {
+              const cellKey = key(cx, cy);
+              if (!visited.has(cellKey)) {
+                visited.add(cellKey);
+                segment.push({ x: cx, y: cy });
+              }
+              const nextX = cx + dx;
+              const nextY = cy + dy;
+              if (!inBounds(grid, nextX, nextY)) break;
+              if (grid[nextY][nextX] !== 0) break;
+              const nextNeighbors = getOpenNeighbors(grid, nextX, nextY);
+              if (nextNeighbors.length !== 2) {
+                cx = nextX;
+                cy = nextY;
+                visited.add(key(cx, cy));
+                segment.push({ x: cx, y: cy });
+                break;
+              }
+              cx = nextX;
+              cy = nextY;
+              if (visited.has(key(cx, cy))) break;
+            }
+          };
+          explore(x, y, dir.x, dir.y);
+          explore(x, y, -dir.x, -dir.y);
+          const unique = Array.from(new Map(segment.map((c) => [key(c.x, c.y), c])).values());
+          if (unique.length < Config.MAZE.widenThreshold) continue;
+          if (Math.random() > Config.MAZE.widenChance) continue;
+          const perpendicular = dir.x !== 0 ? [{ x: 0, y: 1 }, { x: 0, y: -1 }] : [{ x: 1, y: 0 }, { x: -1, y: 0 }];
+          const widenDir = perpendicular[Utils.randInt(perpendicular.length)];
+          unique.forEach((cell) => {
+            const nx = cell.x + widenDir.x;
+            const ny = cell.y + widenDir.y;
+            if (!inBounds(grid, nx, ny) || grid[ny][nx] === 0) return;
+            grid[ny][nx] = 0;
+            widened.push({ x: nx, y: ny });
+          });
+        }
+      }
+    }
+
+    function shortestPath(grid, start, goal, forbidEdges = null) {
+      const queue = [{ x: start.x, y: start.y, prev: null }];
+      const visited = new Set([`${start.x},${start.y}`]);
+      while (queue.length) {
+        const node = queue.shift();
+        if (node.x === goal.x && node.y === goal.y) {
+          const path = [];
+          let cur = node;
+          while (cur) {
+            path.unshift({ x: cur.x, y: cur.y });
+            cur = cur.prev;
+          }
+          return path;
+        }
+        for (const dir of DIRS) {
+          const nx = node.x + dir.x;
+          const ny = node.y + dir.y;
+          if (!inBounds(grid, nx, ny)) continue;
+          if (grid[ny][nx] !== 0 && !(nx === goal.x && ny === goal.y)) continue;
+          const edgeKey = `${Math.min(node.x, nx)},${Math.min(node.y, ny)}-${Math.max(node.x, nx)},${Math.max(node.y, ny)}`;
+          if (forbidEdges && forbidEdges.has(edgeKey)) continue;
+          const key = `${nx},${ny}`;
+          if (visited.has(key)) continue;
+          visited.add(key);
+          queue.push({ x: nx, y: ny, prev: node });
+        }
+      }
+      return [];
+    }
+
+    function ensureAlternative(grid, start, goal) {
+      const primary = shortestPath(grid, start, goal);
+      if (!primary.length) return;
+      const edges = new Set();
+      for (let i = 0; i < primary.length - 1; i += 1) {
+        const a = primary[i];
+        const b = primary[i + 1];
+        const key = `${Math.min(a.x, b.x)},${Math.min(a.y, b.y)}-${Math.max(a.x, b.x)},${Math.max(a.y, b.y)}`;
+        edges.add(key);
+      }
+      const pathSet = new Set(primary.map((p) => `${p.x},${p.y}`));
+      const alt = shortestPath(grid, start, goal, edges);
+      if (alt.length) return;
+      const inner = primary.slice(1, -1);
+      let tries = 0;
+      while (tries < Config.MAZE.alternativeMaxTries && !shortestPath(grid, start, goal, edges).length) {
+        tries += 1;
+        if (!inner.length) break;
+        const cell = inner[Utils.randInt(inner.length)];
+        const dirs = Utils.shuffle([...DIRS]);
+        let carved = false;
+        for (const dir of dirs) {
+          const wallX = cell.x + dir.x;
+          const wallY = cell.y + dir.y;
+          const targetX = cell.x + dir.x * 2;
+          const targetY = cell.y + dir.y * 2;
+          if (!inBounds(grid, targetX, targetY)) continue;
+          if (grid[wallY][wallX] === 1 && grid[targetY][targetX] === 0 && !pathSet.has(`${targetX},${targetY}`)) {
+            grid[wallY][wallX] = 0;
+            carved = true;
+            break;
+          }
+        }
+        if (!carved) {
+          const dir = DIRS[Utils.randInt(DIRS.length)];
+          const wallX = cell.x + dir.x;
+          const wallY = cell.y + dir.y;
+          const targetX = cell.x + dir.x * 2;
+          const targetY = cell.y + dir.y * 2;
+          if (inBounds(grid, targetX, targetY) && grid[wallY][wallX] === 1) {
+            grid[wallY][wallX] = 0;
+            grid[targetY][targetX] = 0;
+          }
+        }
+      }
+    }
+
+    function computeMetadata(grid, rooms, widened) {
+      const junctions = [];
+      for (let y = 1; y < grid.length - 1; y += 1) {
+        for (let x = 1; x < grid[0].length - 1; x += 1) {
+          if (grid[y][x] === 0 && countOpenNeighbors(grid, x, y) >= 3) {
+            junctions.push({ x, y });
+          }
+        }
+      }
+      lastMetadata = {
+        rooms,
+        widened,
+        junctions,
+      };
+    }
+
+    function generate(width, height) {
+      const base = baseGenerate(width, height);
+      const start = { x: 1, y: 1 };
+      const goal = { x: base[0].length - 2, y: base.length - 2 };
+      const rooms = [];
+      const widened = [];
+      addRooms(base, start, goal, rooms);
+      braid(base);
+      ensureJunctionDensity(base);
+      widenCorridors(base, widened);
+      ensureAlternative(base, start, goal);
+      computeMetadata(base, rooms, widened);
+      return { grid: base, metadata: lastMetadata };
+    }
+
     return {
       generate,
+      getMetadata() {
+        return lastMetadata;
+      },
     };
   })();
 
@@ -546,16 +1074,24 @@
     let tileSize = Config.TILE_BASE;
     let screenShake = 0;
     const particles = [];
+    let displayWidth = 0;
+    let displayHeight = 0;
 
     function resize(width, height) {
-      canvas.width = width;
-      canvas.height = height;
+      displayWidth = Math.max(1, Math.floor(width));
+      displayHeight = Math.max(1, Math.floor(height));
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(displayWidth * dpr);
+      canvas.height = Math.floor(displayHeight * dpr);
+      canvas.style.width = `${displayWidth}px`;
+      canvas.style.height = `${displayHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     function updateTileSize(grid) {
       tileSize = Math.max(
         4,
-        Math.floor(Math.min(canvas.width / grid[0].length, canvas.height / grid.length))
+        Math.floor(Math.min(displayWidth / grid[0].length, displayHeight / grid.length))
       );
     }
 
@@ -594,7 +1130,7 @@
       ctx.save();
       ctx.translate(shakeX, shakeY);
       ctx.fillStyle = '#050a10';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, displayWidth, displayHeight);
 
       for (let y = 0; y < grid.length; y += 1) {
         for (let x = 0; x < grid[0].length; x += 1) {
@@ -672,11 +1208,13 @@
         if (fogVisible && !game.visible[item.y][item.x]) return;
         const px = item.x * tileSize + tileSize / 2;
         const py = item.y * tileSize + tileSize / 2;
-        ctx.fillStyle = item.type === 'attack' ? '#9ef01a' : '#ffd60a';
+        const colorMap = { attack: '#9ef01a', invincible: '#ffd60a', smoke: '#adb5ff' };
+        const labelMap = { attack: '剣', invincible: '盾', smoke: '煙' };
+        ctx.fillStyle = colorMap[item.type] || '#ffd60a';
         ctx.font = `${tileSize * 0.6}px "M PLUS 1p"`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(item.type === 'attack' ? '剣' : '盾', px, py);
+        ctx.fillText(labelMap[item.type] || '？', px, py);
       });
 
       // draw goal
@@ -748,7 +1286,7 @@
       if (fogVisible) {
         ctx.fillStyle = 'rgba(5,8,12,0.8)';
         ctx.beginPath();
-        ctx.rect(0, 0, canvas.width, canvas.height);
+        ctx.rect(0, 0, displayWidth, displayHeight);
         ctx.fill();
         ctx.globalCompositeOperation = 'destination-out';
         for (let y = 0; y < game.visible.length; y += 1) {
@@ -794,23 +1332,68 @@
   const Items = (() => {
     const items = [];
 
-    function spawn(grid, count, start, goal) {
+    function spawn(grid, count, start, goal, level, metadata) {
       items.length = 0;
       const h = grid.length;
       const w = grid[0].length;
-      const flat = [];
+      const candidates = [];
       for (let y = 1; y < h - 1; y += 1) {
         for (let x = 1; x < w - 1; x += 1) {
           if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
-            flat.push({ x, y });
+            candidates.push({ x, y });
           }
         }
       }
-      Utils.shuffle(flat);
-      const types = ['attack', 'invincible'];
-      for (let i = 0; i < count && i < flat.length; i += 1) {
-        items.push({ ...flat[i], type: types[i % types.length] });
+      if (!candidates.length) return;
+      Utils.shuffle(candidates);
+      const minItems = Math.max(1, Math.floor(level / 2));
+      const total = Math.min(candidates.length, Math.max(count, minItems));
+      const typesQueue = [];
+      typesQueue.push('attack');
+      if (total > 1) typesQueue.push('invincible');
+      while (typesQueue.length < total) {
+        if (Math.random() < Config.ITEM.smokeChance) {
+          typesQueue.push('smoke');
+        } else {
+          typesQueue.push(Math.random() < 0.5 ? 'attack' : 'invincible');
+        }
       }
+
+      const startRange = candidates.filter((cell) => {
+        const d = Math.abs(cell.x - start.x) + Math.abs(cell.y - start.y);
+        return d >= 3 && d <= 8;
+      });
+      if (startRange.length) {
+        const pick = startRange[0];
+        items.push({ ...pick, type: 'attack' });
+        const key = `${pick.x},${pick.y}`;
+        for (let i = candidates.length - 1; i >= 0; i -= 1) {
+          if (`${candidates[i].x},${candidates[i].y}` === key) {
+            candidates.splice(i, 1);
+            break;
+          }
+        }
+        typesQueue.shift();
+      }
+
+      while (items.length < total && candidates.length) {
+        const cell = candidates.shift();
+        const type = typesQueue.shift() || 'attack';
+        items.push({ ...cell, type });
+      }
+
+      if (metadata && metadata.rooms) {
+        metadata.rooms.forEach((room) => {
+          if (items.length >= total) return;
+          const tiles = room.tiles ? [...room.tiles] : [];
+          Utils.shuffle(tiles);
+          const freeTile = tiles.find((tile) => !items.some((item) => item.x === tile.x && item.y === tile.y));
+          if (freeTile) {
+            items.push({ ...freeTile, type: 'invincible' });
+          }
+        });
+      }
+      items.splice(total);
     }
 
     function take(x, y) {
@@ -901,6 +1484,11 @@
       trapType: null,
       freezeTimer: 0,
       speed: Config.PLAYER.baseSpeed,
+      dashTimer: 0,
+      dashCooldown: 0,
+      smokeTimer: 0,
+      smokeCharges: 0,
+      lastMoveDir: { x: 0, y: 0 },
     };
 
     function reset(pos) {
@@ -914,6 +1502,11 @@
       state.trapType = null;
       state.freezeTimer = 0;
       state.speed = Config.PLAYER.baseSpeed;
+      state.dashTimer = 0;
+      state.dashCooldown = 0;
+      state.smokeTimer = 0;
+      state.smokeCharges = 0;
+      state.lastMoveDir = { x: 0, y: 0 };
     }
 
     function update(delta, grid) {
@@ -923,13 +1516,35 @@
       }
       const reverse = state.trapType === 'reverse';
       const dir = Input.getDirection(reverse);
-      let moveX = dir.x;
-      let moveY = dir.y;
+      const centerX = state.tileX + 0.5;
+      const centerY = state.tileY + 0.5;
+      let moveX = Math.sign(dir.x || 0);
+      let moveY = Math.sign(dir.y || 0);
+      if (moveX !== 0 && Math.abs(state.y - centerY) > 0.35 && moveY !== 0) {
+        moveX = 0;
+      }
+      if (moveX !== 0 && Math.abs(state.y - centerY) > 0.35) {
+        moveX = 0;
+        if (moveY !== 0) {
+          state.y = Utils.lerp(state.y, centerY, 0.45);
+        }
+      }
+      if (moveY !== 0 && Math.abs(state.x - centerX) > 0.35) {
+        moveY = 0;
+        if (moveX !== 0) {
+          state.x = Utils.lerp(state.x, centerX, 0.45);
+        }
+      }
+      if (moveX !== 0 && moveY !== 0) {
+        moveX = Math.abs(dir.x) >= Math.abs(dir.y) ? Math.sign(dir.x) : 0;
+        moveY = moveX === 0 ? Math.sign(dir.y) : 0;
+      }
       const length = Math.hypot(moveX, moveY) || 1;
       moveX /= length;
       moveY /= length;
       let speed = state.speed;
       if (state.trapType === 'slow') speed *= Config.PLAYER.slowFactor;
+      if (state.dashTimer > 0) speed *= Config.PLAYER.dashMultiplier;
       const newX = state.x + moveX * delta * speed;
       const newY = state.y + moveY * delta * speed;
 
@@ -939,13 +1554,21 @@
         if (grid[ty] && grid[ty][tx] === 0) {
           state.x = nx;
           state.y = ny;
-          state.tileX = tx;
-          state.tileY = ty;
+          if (tx !== state.tileX || ty !== state.tileY) {
+            state.tileX = tx;
+            state.tileY = ty;
+            Input.notifyStep();
+          }
         }
       };
 
+      const prevTileX = state.tileX;
+      const prevTileY = state.tileY;
       tryMove(newX, state.y);
       tryMove(state.x, newY);
+      if (state.tileX !== prevTileX || state.tileY !== prevTileY) {
+        state.lastMoveDir = { x: moveX, y: moveY };
+      }
 
       if (state.attackTimer > 0) state.attackTimer -= delta;
       if (state.invincibleTimer > 0) state.invincibleTimer -= delta;
@@ -959,24 +1582,62 @@
           Input.setPadLabels(false);
         }
       }
+      if (state.dashTimer > 0) {
+        state.dashTimer = Math.max(0, state.dashTimer - delta);
+      }
+      if (state.dashCooldown > 0) {
+        state.dashCooldown = Math.max(0, state.dashCooldown - delta);
+      }
+      if (state.smokeTimer > 0) {
+        state.smokeTimer = Math.max(0, state.smokeTimer - delta);
+      }
     }
 
     return {
       state,
       reset,
       update,
+      tryDash() {
+        if (state.dashCooldown > 0 || state.freezeTimer > 0) return false;
+        state.dashTimer = Config.PLAYER.dashDuration;
+        state.dashCooldown = Config.PLAYER.dashCooldown;
+        return true;
+      },
+      addSmokeCharge() {
+        state.smokeCharges += 1;
+      },
+      useSmoke() {
+        if (state.smokeCharges <= 0 || state.smokeTimer > 0) return false;
+        state.smokeCharges -= 1;
+        state.smokeTimer = Config.PLAYER.smokeDuration;
+        return true;
+      },
     };
   })();
 
   const EnemyManager = (() => {
     const enemies = [];
     let difficultyLevel = 1;
+    let mazeMeta = { rooms: [], widened: [], junctions: [] };
     const dirs = [
       { x: 1, y: 0 },
       { x: -1, y: 0 },
       { x: 0, y: 1 },
       { x: 0, y: -1 },
     ];
+
+    function countOpenNeighbors(grid, x, y) {
+      return dirs.reduce((sum, d) => (grid[y + d.y] && grid[y + d.y][x + d.x] === 0 ? sum + 1 : sum), 0);
+    }
+
+    function isNarrowCorridor(grid, x, y) {
+      const neighbors = dirs
+        .filter((d) => grid[y + d.y] && grid[y + d.y][x + d.x] === 0)
+        .map((d) => ({ x: d.x, y: d.y }));
+      if (neighbors.length !== 2) return false;
+      const [a, b] = neighbors;
+      return a.x === -b.x && a.y === -b.y;
+    }
 
     function createPatrolTargets(grid, start) {
       const targets = [];
@@ -1002,8 +1663,7 @@
         outline: base.outline,
         speedFactor: base.speedFactor,
         view: base.view,
-        pathTimerMax: Math.max(18, base.pathTimer - difficultyLevel * 1.5),
-        pathTimer: 0,
+        pathCooldown: Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax),
         x: start.x + 0.5,
         y: start.y + 0.5,
         tileX: start.x,
@@ -1013,6 +1673,11 @@
         chaseMode: false,
         patrolTargets: [],
         patrolIndex: 0,
+        graceTimer: Config.ENEMY_BEHAVIOR.chaseGrace,
+        waitTimer: 0,
+        home: { x: start.x, y: start.y },
+        returning: false,
+        wanderTimer: Utils.randRange(0.3, 1.2),
       };
       if (type === 'PATROL') {
         enemy.patrolTargets = createPatrolTargets(grid, start);
@@ -1020,41 +1685,87 @@
       return enemy;
     }
 
-    function spawn(grid, count, start, goal, level) {
+    function gatherPool(cells = []) {
+      const copy = cells.map((c) => ({ x: c.x, y: c.y }));
+      Utils.shuffle(copy);
+      return copy;
+    }
+
+    function selectSpawn(pool, grid, start, goal, used) {
+      while (pool.length) {
+        const cell = pool.shift();
+        const key = `${cell.x},${cell.y}`;
+        if (used.has(key)) continue;
+        if (grid[cell.y][cell.x] !== 0) continue;
+        if (cell.x === goal.x && cell.y === goal.y) continue;
+        const dist = Math.hypot(cell.x - start.x, cell.y - start.y);
+        if (dist < 6) continue;
+        if (isNarrowCorridor(grid, cell.x, cell.y)) continue;
+        used.add(key);
+        return cell;
+      }
+      return null;
+    }
+
+    function spawn(grid, count, start, goal, level, metadata = { rooms: [], widened: [], junctions: [] }) {
       difficultyLevel = level;
+      mazeMeta = metadata || { rooms: [], widened: [], junctions: [] };
       enemies.length = 0;
-      const openCells = [];
+      const used = new Set();
+
+      const roomTiles = gatherPool(
+        (mazeMeta.rooms || []).flatMap((room) => room.tiles || [{ x: room.center?.x || start.x, y: room.center?.y || start.y }])
+      );
+      const wideTiles = gatherPool(mazeMeta.widened || []);
+      const junctionTiles = gatherPool(mazeMeta.junctions || []);
+      const generalTiles = [];
       for (let y = 1; y < grid.length - 1; y += 1) {
         for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
-            if (Math.abs(x - start.x) + Math.abs(y - start.y) < 5) continue;
-            openCells.push({ x, y });
-          }
+          if (grid[y][x] !== 0) continue;
+          generalTiles.push({ x, y });
         }
       }
-      Utils.shuffle(openCells);
+      Utils.shuffle(generalTiles);
+
+      const placements = [];
+      const roomCell = selectSpawn(roomTiles, grid, start, goal, used);
+      if (roomCell) placements.push(roomCell);
+      if (placements.length < count) {
+        const wideCell = selectSpawn(wideTiles, grid, start, goal, used);
+        if (wideCell) placements.push(wideCell);
+      }
+      while (placements.length < count) {
+        const branchCell = selectSpawn(junctionTiles, grid, start, goal, used);
+        if (!branchCell) break;
+        placements.push(branchCell);
+      }
+      while (placements.length < count) {
+        const cell = selectSpawn(generalTiles, grid, start, goal, used);
+        if (!cell) break;
+        placements.push(cell);
+      }
+
       const typePool = ['SPRINT', 'WANDER'];
       if (level >= 2) typePool.push('STRATEGY');
       if (level >= 3) typePool.push('SPRINT');
       if (level >= 4) typePool.push('PATROL');
       if (level >= 6) typePool.push('STRATEGY', 'SPRINT');
       if (level >= 8) typePool.push('PATROL', 'WANDER');
-      for (let i = 0; i < count && i < openCells.length; i += 1) {
+
+      placements.slice(0, count).forEach((cell) => {
         const type = typePool[Utils.randInt(typePool.length)];
-        enemies.push(createEnemy(type, openCells[i], grid));
-      }
+        enemies.push(createEnemy(type, cell, grid));
+      });
     }
 
     function planPath(enemy, grid, target, useAStar) {
       if (!target) return false;
       const start = { x: enemy.tileX, y: enemy.tileY };
-      const path = useAStar
-        ? Pathfinding.aStar(grid, start, target)
-        : Pathfinding.bfs(grid, start, target);
+      const path = useAStar ? Pathfinding.aStar(grid, start, target) : Pathfinding.bfs(grid, start, target);
       if (path.length) {
         enemy.path = path;
         enemy.currentTarget = { ...target };
-        enemy.pathTimer = enemy.pathTimerMax;
+        enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
         return true;
       }
       return false;
@@ -1068,95 +1779,168 @@
         const pick = options[Utils.randInt(options.length)];
         enemy.path = [{ x: pick.x, y: pick.y }];
         enemy.currentTarget = { ...pick };
-        enemy.pathTimer = enemy.pathTimerMax * 0.5;
       }
+    }
+
+    function applyDensityControl() {
+      const zoneMap = new Map();
+      const zoneSize = Config.ENEMY_BEHAVIOR.densityZone;
+      enemies.forEach((enemy) => {
+        const zx = Math.floor(enemy.tileX / zoneSize);
+        const zy = Math.floor(enemy.tileY / zoneSize);
+        const key = `${zx},${zy}`;
+        if (!zoneMap.has(key)) zoneMap.set(key, []);
+        zoneMap.get(key).push(enemy);
+      });
+      zoneMap.forEach((list) => {
+        if (list.length > Config.ENEMY_BEHAVIOR.densityLimit) {
+          list
+            .slice(Config.ENEMY_BEHAVIOR.densityLimit)
+            .forEach((enemy) => {
+              enemy.waitTimer = Math.max(enemy.waitTimer, Config.ENEMY_BEHAVIOR.densityCooldown);
+              enemy.path = [];
+            });
+        }
+      });
     }
 
     function update(delta, grid, player, options = {}) {
       const playerTile = { x: player.tileX, y: player.tileY };
       const noise = options.noise || { timer: 0 };
+      const smokeActive = player.smokeTimer > 0;
+      const baseSpeed = Config.LEVEL.baseEnemySpeed + (difficultyLevel - 1) * Config.LEVEL.speedStep;
+
+      applyDensityControl();
+
       let pathBudget = Config.MAX_FRAME_PATHFIND;
       enemies.forEach((enemy) => {
-        enemy.pathTimer -= delta * 60;
+        if (enemy.dead) return;
+        enemy.graceTimer = Math.max(0, enemy.graceTimer - delta);
+        if (enemy.waitTimer > 0) {
+          enemy.waitTimer = Math.max(0, enemy.waitTimer - delta);
+        }
+        enemy.pathCooldown -= delta;
+        enemy.wanderTimer -= delta;
+
         const noiseActive = noise.timer > 0;
         const distance = Math.abs(enemy.tileX - playerTile.x) + Math.abs(enemy.tileY - playerTile.y);
         let desiredTarget = null;
         let useAStar = false;
-
-        if (noiseActive) {
-          desiredTarget = { x: noise.x, y: noise.y };
+        let vision = enemy.view;
+        if (smokeActive) {
+          vision = Math.max(2, Math.floor(vision * 0.5));
         }
 
-        if (!desiredTarget) {
-          switch (enemy.type) {
-            case 'STRATEGY':
-              desiredTarget = playerTile;
-              useAStar = true;
-              break;
-            case 'SPRINT':
-              if (distance <= enemy.view) {
-                desiredTarget = playerTile;
+        if (enemy.waitTimer <= 0) {
+          if (noiseActive) {
+            desiredTarget = { x: noise.x, y: noise.y };
+          } else if (enemy.graceTimer <= 0) {
+            switch (enemy.type) {
+              case 'STRATEGY': {
+                if (distance <= vision * 1.2) {
+                  const predicted = { x: playerTile.x, y: playerTile.y };
+                  if (player.lastMoveDir) {
+                    predicted.x += Math.sign(player.lastMoveDir.x) * Math.min(2, Math.abs(player.lastMoveDir.x) > 0 ? 2 : 0);
+                    predicted.y += Math.sign(player.lastMoveDir.y) * Math.min(2, Math.abs(player.lastMoveDir.y) > 0 ? 2 : 0);
+                    if (grid[predicted.y] && grid[predicted.y][predicted.x] === 0) {
+                      desiredTarget = predicted;
+                    }
+                  }
+                }
+                if (!desiredTarget) {
+                  desiredTarget = playerTile;
+                  useAStar = true;
+                }
+                break;
               }
-              break;
-            case 'WANDER':
-              if (distance <= enemy.view || enemy.chaseMode) {
-                enemy.chaseMode = true;
-                if (distance > enemy.view * 2 && !noiseActive) {
-                  enemy.chaseMode = false;
-                } else {
+              case 'SPRINT':
+                if (distance <= vision) {
                   desiredTarget = playerTile;
                 }
-              }
-              break;
-            case 'PATROL':
-              if (distance <= enemy.view) {
-                desiredTarget = playerTile;
-              }
-              break;
+                break;
+              case 'WANDER':
+                if (distance <= vision || enemy.chaseMode) {
+                  enemy.chaseMode = true;
+                  if (distance > vision * 2 && !noiseActive) {
+                    enemy.chaseMode = false;
+                  } else {
+                    desiredTarget = playerTile;
+                  }
+                }
+                break;
+              case 'PATROL':
+                if (distance <= vision) {
+                  desiredTarget = playerTile;
+                }
+                break;
+            }
           }
         }
 
-        if (!desiredTarget && enemy.type === 'PATROL' && enemy.patrolTargets.length) {
+        if (!desiredTarget && enemy.returning) {
+          desiredTarget = { ...enemy.home };
+        }
+
+        if (!desiredTarget && enemy.type === 'PATROL' && enemy.waitTimer <= 0 && enemy.patrolTargets.length) {
           const current = enemy.patrolTargets[enemy.patrolIndex];
-          if (!enemy.currentTarget || (enemy.tileX === current.x && enemy.tileY === current.y)) {
+          if (enemy.tileX === current.x && enemy.tileY === current.y) {
             enemy.patrolIndex = (enemy.patrolIndex + 1) % enemy.patrolTargets.length;
           }
           desiredTarget = enemy.patrolTargets[enemy.patrolIndex];
         }
 
-        if (desiredTarget) {
-          const sameTarget =
-            enemy.currentTarget && enemy.currentTarget.x === desiredTarget.x && enemy.currentTarget.y === desiredTarget.y;
-          if ((!sameTarget && pathBudget > 0) || enemy.pathTimer <= 0) {
-            if (pathBudget > 0 && planPath(enemy, grid, desiredTarget, useAStar)) {
-              pathBudget -= 1;
+        if (desiredTarget && enemy.waitTimer <= 0 && enemy.pathCooldown <= 0 && pathBudget > 0) {
+          if (planPath(enemy, grid, desiredTarget, useAStar)) {
+            pathBudget -= 1;
+            const plannedLength = enemy.path.length;
+            if (!enemy.returning && plannedLength > Config.ENEMY_BEHAVIOR.leashDistance) {
+              enemy.returning = true;
+              planPath(enemy, grid, enemy.home, false);
+            } else if (enemy.returning && plannedLength === 0) {
+              enemy.returning = false;
+            } else if (!enemy.returning) {
+              enemy.returning = false;
             }
+          } else {
+            enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
           }
-        } else if (!enemy.path.length || enemy.pathTimer <= 0) {
+        }
+
+        if (!enemy.path.length && enemy.waitTimer <= 0 && enemy.pathCooldown <= 0) {
           randomStep(enemy, grid);
+          enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
         }
 
-        const target = enemy.path[0];
-        if (target) {
-          const dx = target.x + 0.5 - enemy.x;
-          const dy = target.y + 0.5 - enemy.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const speedBase = Config.LEVEL.baseEnemySpeed + Config.LEVEL.speedStep * (difficultyLevel - 1);
-          const speed = speedBase * enemy.speedFactor * (noiseActive ? 1 + Config.TRAP.noisePullStrength : 1);
-          enemy.x += (dx / len) * speed * delta;
-          enemy.y += (dy / len) * speed * delta;
-          enemy.tileX = Math.floor(enemy.x);
-          enemy.tileY = Math.floor(enemy.y);
-          if (Math.abs(enemy.x - (target.x + 0.5)) < 0.05 && Math.abs(enemy.y - (target.y + 0.5)) < 0.05) {
+        const speedFactor =
+          enemy.speedFactor * (distance <= Config.ENEMY_BEHAVIOR.closeDistanceSlow ? Config.ENEMY_BEHAVIOR.closeSpeedFactor : 1);
+        const noiseBoost = noiseActive ? 1 + Config.TRAP.noisePullStrength : 1;
+        let speed = baseSpeed * speedFactor * noiseBoost * delta;
+        if (enemy.waitTimer > 0) speed = 0;
+
+        if (enemy.path.length) {
+          const next = enemy.path[0];
+          const targetX = next.x + 0.5;
+          const targetY = next.y + 0.5;
+          const dx = targetX - enemy.x;
+          const dy = targetY - enemy.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist <= speed || dist < 0.0001) {
+            enemy.x = targetX;
+            enemy.y = targetY;
+            enemy.tileX = next.x;
+            enemy.tileY = next.y;
             enemy.path.shift();
+          } else if (dist > 0) {
+            enemy.x += (dx / dist) * speed;
+            enemy.y += (dy / dist) * speed;
           }
-        }
-
-        const dist = Math.hypot(enemy.x - player.x, enemy.y - player.y);
-        if (player.attackTimer > 0 && dist < 0.9) {
-          enemy.dead = true;
-          Renderer.addParticle(enemy.tileX, enemy.tileY, '#ff6b6b');
-          Audio.play('hit');
+        } else if (enemy.wanderTimer <= 0 && enemy.waitTimer <= 0) {
+          randomStep(enemy, grid);
+          enemy.wanderTimer = Utils.randRange(0.6, 1.6);
+          enemy.pathCooldown = Utils.randRange(
+            Config.ENEMY_BEHAVIOR.pathIntervalMin,
+            Config.ENEMY_BEHAVIOR.pathIntervalMax
+          );
         }
       });
 
@@ -1173,6 +1957,7 @@
       update,
     };
   })();
+
 
   const Ranking = (() => {
     let enabled = true;
@@ -1256,6 +2041,7 @@
       lastUpdate: Utils.now(),
       debug: { grid: false, fogForce: false },
       loading: false,
+      mazeMeta: { rooms: [], widened: [], junctions: [] },
     };
 
     function fullVisibility(grid) {
@@ -1267,14 +2053,16 @@
       const baseH = Config.LEVEL.baseSize.h + (level - 1) * Config.LEVEL.sizeStep;
       let cols = baseW;
       let rows = baseH;
-      let tile = Math.floor(Math.min(canvas.width / cols, canvas.height / rows));
+      const canvasWidth = canvas.clientWidth || window.innerWidth;
+      const canvasHeight = canvas.clientHeight || window.innerHeight;
+      let tile = Math.floor(Math.min(canvasWidth / cols, canvasHeight / rows));
       while (
         tile < Config.TILE_MIN &&
         (cols > Config.LEVEL.baseSize.w || rows > Config.LEVEL.baseSize.h)
       ) {
         if (cols > Config.LEVEL.baseSize.w) cols = Math.max(Config.LEVEL.baseSize.w, cols - Config.LEVEL.sizeStep);
         if (rows > Config.LEVEL.baseSize.h) rows = Math.max(Config.LEVEL.baseSize.h, rows - Config.LEVEL.sizeStep);
-        tile = Math.floor(Math.min(canvas.width / cols, canvas.height / rows));
+        tile = Math.floor(Math.min(canvasWidth / cols, canvasHeight / rows));
       }
       return { cols, rows };
     }
@@ -1285,21 +2073,21 @@
       return new Promise((resolve) => {
         requestAnimationFrame(() => {
           const { cols, rows } = computeMazeSize(state.level);
-          const maze = Maze.generate(cols, rows);
+          const { grid: maze, metadata } = Maze.generate(cols, rows);
           state.grid = maze;
+          state.mazeMeta = metadata;
           state.start = { x: 1, y: 1 };
           state.goal = { x: maze[0].length - 2, y: maze.length - 2 };
           Player.reset(state.start);
           Input.setPadLabels(false);
-          const itemCount = Math.max(
-            1,
-            Math.floor(Config.LEVEL.baseItems * Math.pow(Config.LEVEL.itemDropDecay, state.level - 1))
-          );
-          Items.spawn(maze, itemCount, state.start, state.goal);
+          const minItemsByLevel = Math.max(1, Math.floor(state.level / 2));
+          const baseItems = Math.floor(Config.LEVEL.baseItems * Math.pow(Config.LEVEL.itemDropDecay, state.level - 1));
+          const itemCount = Math.max(minItemsByLevel, baseItems);
+          Items.spawn(maze, itemCount, state.start, state.goal, state.level, metadata);
           const trapCount = Config.LEVEL.baseTraps + state.level;
           Traps.spawn(maze, trapCount, state.start, state.goal, state.level, Items.items);
           const enemyCount = Math.min(Config.LEVEL.baseEnemies + state.level, Config.LEVEL.maxEnemies);
-          EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level);
+          EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level, metadata);
           state.fog.timer = 0;
           state.fog.radius = Math.max(
             3,
@@ -1332,7 +2120,7 @@
       showOverlay(null);
       await setupLevel();
       dom.pauseButton.disabled = false;
-      dom.virtualPad.setAttribute('aria-hidden', 'false');
+      dom.virtualPad.setAttribute('aria-hidden', Input.getPadState() === 'hidden' ? 'true' : 'false');
       state.playing = true;
       state.paused = false;
       Audio.play('start');
@@ -1379,6 +2167,18 @@
       state.time += delta;
       state.totalTime += delta;
       Player.update(delta, state.grid);
+
+      if (Input.consumeDash()) {
+        if (Player.tryDash() && ConfigStore.get('vibration') && navigator.vibrate) {
+          navigator.vibrate(20);
+        }
+      }
+      if (Input.consumeSmoke()) {
+        if (Player.useSmoke()) {
+          Audio.play('item');
+          Renderer.addParticle(state.player.tileX, state.player.tileY, '#adb5ff');
+        }
+      }
 
       if (state.player.invincibleTimer > 0) {
         if (state.player.trapTimer > 0 || state.player.trapType) {
@@ -1440,16 +2240,26 @@
       const item = Items.take(state.player.tileX, state.player.tileY);
       if (item) {
         if (ConfigStore.get('vibration') && navigator.vibrate) navigator.vibrate(30);
-        if (item.type === 'attack') {
-          state.player.attackTimer = Config.ITEM.attackDuration;
-        } else {
-          state.player.invincibleTimer = Config.ITEM.invincibleDuration;
-          state.player.trapType = null;
-          state.player.trapTimer = 0;
-          Input.setPadLabels(false);
+        let particleColor = '#9ef01a';
+        switch (item.type) {
+          case 'attack':
+            state.player.attackTimer = Config.ITEM.attackDuration;
+            particleColor = '#9ef01a';
+            break;
+          case 'invincible':
+            state.player.invincibleTimer = Config.ITEM.invincibleDuration;
+            state.player.trapType = null;
+            state.player.trapTimer = 0;
+            Input.setPadLabels(false);
+            particleColor = '#ffd60a';
+            break;
+          case 'smoke':
+            Player.addSmokeCharge();
+            particleColor = '#adb5ff';
+            break;
         }
         Audio.play('item');
-        Renderer.addParticle(state.player.tileX, state.player.tileY, '#9ef01a');
+        Renderer.addParticle(state.player.tileX, state.player.tileY, particleColor);
       }
 
       // check traps
@@ -1635,6 +2445,12 @@
       fieldStatuses.push(`ノイズ ${GameState.state.noise.timer.toFixed(1)}s`);
     }
     dom.statusField.textContent = fieldStatuses.length ? fieldStatuses.join(' / ') : '-';
+    dom.statusDash.textContent =
+      player.dashCooldown > 0 ? `${player.dashCooldown.toFixed(1)}s` : 'Ready';
+    dom.statusSmoke.textContent =
+      player.smokeTimer > 0 ? `${player.smokeTimer.toFixed(1)}s` : `${player.smokeCharges}`;
+    dom.dashButton.disabled = player.dashCooldown > 0;
+    dom.smokeButton.disabled = player.smokeTimer > 0 || player.smokeCharges <= 0;
   }
 
   function hudLoop() {
@@ -1643,8 +2459,12 @@
   }
 
   function resizeCanvas() {
-    const rect = canvas.parentElement.getBoundingClientRect();
-    Renderer.resize(Math.floor(rect.width), Math.floor(Math.max(Config.CANVAS_MIN_HEIGHT, rect.height)));
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    Renderer.resize(width, height);
+    if (GameState.state.grid.length) {
+      Renderer.draw(GameState.state);
+    }
   }
 
   window.addEventListener('resize', resizeCanvas);
@@ -1655,6 +2475,26 @@
 
   showOverlay('title');
   GameState.preparePreview();
+
+  const tutorialKey = 'maze-dpad-tutorial-v1';
+  let tutorialSeen = false;
+  try {
+    tutorialSeen = localStorage.getItem(tutorialKey) === '1';
+  } catch (err) {
+    tutorialSeen = false;
+  }
+  if (!tutorialSeen) {
+    dom.tutorial.classList.remove('hidden');
+  }
+
+  dom.tutorialClose.addEventListener('click', () => {
+    dom.tutorial.classList.add('hidden');
+    try {
+      localStorage.setItem(tutorialKey, '1');
+    } catch (err) {
+      // ignore
+    }
+  });
 
   dom.startButton.addEventListener('click', () => {
     GameState.startGame();
