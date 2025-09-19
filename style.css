@@ -8,6 +8,9 @@
   --pad-shadow: 0 18px 40px rgba(0, 0, 0, 0.4);
   --pad-gap: 8px;
   --btn-press-scale: 0.96;
+  --pad-h: 0px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 * {
@@ -17,10 +20,22 @@
 body {
   margin: 0;
   width: 100vw;
-  height: 100dvh;
+  min-height: 100dvh;
   background: var(--bg);
   color: var(--text);
   overflow: hidden;
+}
+
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  background: #050b18;
+  overflow: hidden;
+}
+
+body.dock-active #stage {
+  height: calc(100dvh - var(--pad-h) - var(--safe-bottom));
 }
 
 body.high-contrast {
@@ -36,27 +51,22 @@ body.reduce-motion * {
 }
 
 #game-canvas {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100dvh;
   display: block;
-  background: #050b18;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
 #touch-layer {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  width: 100vw;
-  height: 100dvh;
   pointer-events: auto;
   z-index: 100;
 }
 
 #status-bar {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
   left: 50%;
   transform: translateX(-50%);
   width: min(96vw, 720px);
@@ -97,8 +107,8 @@ body.reduce-motion * {
 }
 
 #minimap-container {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 76px);
+  position: absolute;
+  top: calc(var(--safe-top) + 76px);
   right: calc(env(safe-area-inset-right, 0px) + 16px);
   display: flex;
   flex-direction: column;
@@ -131,8 +141,8 @@ body.reduce-motion * {
 }
 
 #log-wrapper {
-  position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 110px);
+  position: absolute;
+  bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
   width: min(92vw, 640px);
@@ -172,43 +182,61 @@ body.reduce-motion * {
   opacity: 1;
 }
 
-#control-layer {
+body:not(.dock-active) #pad-dock {
+  display: none;
+}
+
+#pad-dock {
   position: fixed;
-  bottom: 0;
   left: 0;
-  width: 100vw;
-  height: 100dvh;
-  pointer-events: none;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--pad-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  background: rgba(8, 12, 20, 0.85);
+  backdrop-filter: blur(6px);
   z-index: 3000;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  overflow: visible;
+}
+
+#pad-dock .dock-inner {
+  position: relative;
+  width: min(100%, 720px);
+  min-height: var(--pad-h);
+  padding: 16px 24px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 24px;
+  pointer-events: auto;
 }
 
 #thumb-zone {
-  position: absolute;
-  bottom: calc(env(safe-area-inset-bottom, 12px));
   display: flex;
   align-items: flex-end;
-  gap: 16px;
-  pointer-events: auto;
+  gap: var(--pad-gap);
   --thumb-offset-x: 0px;
   --thumb-offset-y: 0px;
+  transform: translate(var(--thumb-offset-x), calc(-1 * var(--thumb-offset-y)));
 }
 
-#control-layer[data-hand="right"] #thumb-zone {
-  right: calc(env(safe-area-inset-right, 12px));
+#pad-dock[data-hand="right"] #thumb-zone {
   flex-direction: row-reverse;
   transform: translate(calc(-1 * var(--thumb-offset-x)), calc(-1 * var(--thumb-offset-y)));
 }
 
-#control-layer[data-hand="left"] #thumb-zone {
-  left: calc(env(safe-area-inset-left, 12px));
-  transform: translate(var(--thumb-offset-x), calc(-1 * var(--thumb-offset-y)));
+#pad-dock[data-hand="left"] #thumb-zone {
+  flex-direction: row;
 }
 
 #reach-guide {
   position: absolute;
   width: 320px;
   height: 220px;
-  bottom: calc(env(safe-area-inset-bottom, 0px));
+  bottom: var(--safe-bottom);
   border-bottom-left-radius: 80% 100%;
   border-bottom-right-radius: 80% 100%;
   opacity: 0.25;
@@ -216,15 +244,15 @@ body.reduce-motion * {
   display: none;
 }
 
-#control-layer[data-hand="right"] #reach-guide {
-  right: 0;
+#pad-dock[data-hand="right"] #reach-guide {
+  right: 24px;
   background: radial-gradient(circle at 100% 100%, rgba(96, 165, 250, 0.25), transparent 70%);
   transform-origin: 100% 100%;
   transform: rotate(-12deg);
 }
 
-#control-layer[data-hand="left"] #reach-guide {
-  left: 0;
+#pad-dock[data-hand="left"] #reach-guide {
+  left: 24px;
   background: radial-gradient(circle at 0% 100%, rgba(96, 165, 250, 0.25), transparent 70%);
   transform-origin: 0 100%;
   transform: rotate(12deg);
@@ -236,24 +264,35 @@ body.reduce-motion * {
 
 .dpad {
   position: relative;
-  padding: 12px;
+  padding: 12px 18px;
   border-radius: 24px;
   background: rgba(17, 24, 39, 0.82);
   backdrop-filter: blur(12px);
   box-shadow: var(--pad-shadow);
   touch-action: none;
-}
-
-.pad-grid {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--pad-gap);
 }
 
-.pad-middle {
+.pad-row {
   display: flex;
   gap: var(--pad-gap);
+  align-items: center;
+  justify-content: center;
+}
+
+.pad-row-middle {
+  width: 100%;
+}
+
+.pad-row-middle .pad-menu {
+  margin-left: var(--pad-gap);
+}
+
+.pad-row-down {
+  margin-top: var(--pad-gap);
 }
 
 .pad-btn,
@@ -314,16 +353,27 @@ body.reduce-motion * {
   display: flex;
   flex-direction: column;
   gap: var(--pad-gap);
+  align-items: flex-start;
 }
 
+#pad-dock[data-hand="right"] .main-actions {
+  align-items: flex-end;
+}
+
+#pad-dock[data-hand="left"] .main-actions {
+  align-items: flex-start;
+}
+
+
 .radial {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  background: rgba(11, 18, 32, 0.7);
+  background: rgba(11, 18, 32, 0.55);
+  border-radius: 24px;
   pointer-events: none;
   opacity: 0;
   transition: opacity 160ms ease;
-  z-index: 3000;
+  z-index: 20;
 }
 
 .radial.active {
