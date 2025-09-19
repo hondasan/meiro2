@@ -7,30 +7,61 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="game-wrapper">
-    <header id="status-bar">
-      <div class="status-item">階: <span id="ui-floor">1F</span></div>
-      <div class="status-item">HP: <span id="ui-hp">20 / 20</span></div>
-      <div class="status-item">Lv/Exp: <span id="ui-level">1</span> / <span id="ui-exp">0</span></div>
-      <div class="status-item">満腹: <span id="ui-hunger">100%</span></div>
-      <div class="status-item">攻/防: <span id="ui-atk">1</span> / <span id="ui-def">0</span></div>
-      <div class="status-item">所持: <span id="ui-inventory">0 / 20</span></div>
-    </header>
-    <canvas id="game-canvas" aria-label="ローグライクゲーム" role="img"></canvas>
-    <div id="message-log" aria-live="polite"></div>
-    <div id="dpad" class="dpad" data-size="full">
-      <div class="dpad-inner">
-        <button class="pad-btn" data-action="up" aria-label="上">▲</button>
-        <div class="pad-row">
-          <button class="pad-btn" data-action="left" aria-label="左">◀</button>
-          <button class="pad-btn" data-action="wait" aria-label="待機">•</button>
-          <button class="pad-btn" data-action="right" aria-label="右">▶</button>
-        </div>
-        <button class="pad-btn" data-action="down" aria-label="下">▼</button>
-      </div>
-      <button id="pad-menu" class="pad-menu" aria-label="メニュー">≡</button>
+  <canvas id="game-canvas" aria-label="ローグライクゲーム" role="img"></canvas>
+  <div id="touch-layer"></div>
+
+  <header id="status-bar" aria-live="polite">
+    <button id="status-collapse" aria-expanded="false" aria-label="ステータスの展開切替">▲</button>
+    <div class="status-primary">
+      <span class="status-item">階 <strong id="ui-floor">1F</strong></span>
+      <span class="status-item">HP <strong id="ui-hp">20 / 20</strong></span>
+      <span class="status-item">Lv <strong id="ui-level">1</strong></span>
+      <span class="status-item">Exp <strong id="ui-exp">0</strong></span>
+      <span class="status-item">満腹 <strong id="ui-hunger">100%</strong></span>
     </div>
-    <button id="pad-toggle" class="pad-toggle" data-visibility="full" aria-label="Dパッド切替">🕹</button>
+    <div class="status-secondary" hidden>
+      <span class="status-item">攻撃 <strong id="ui-atk">1</strong></span>
+      <span class="status-item">防御 <strong id="ui-def">0</strong></span>
+      <span class="status-item">所持 <strong id="ui-inventory">0 / 20</strong></span>
+    </div>
+  </header>
+
+  <aside id="minimap-container">
+    <button id="minimap-toggle" aria-expanded="false" aria-label="ミニマップ切替">🗺</button>
+    <canvas id="minimap" width="128" height="128" aria-hidden="true"></canvas>
+  </aside>
+
+  <div id="log-wrapper">
+    <div id="message-log" aria-live="polite"></div>
+    <div id="toast" class="toast" aria-live="assertive"></div>
+  </div>
+
+  <div id="control-layer" data-hand="right">
+    <div id="reach-guide" aria-hidden="true"></div>
+    <div id="thumb-zone">
+      <div id="dpad" class="dpad" data-size="M">
+        <div class="pad-grid">
+          <button class="pad-btn" data-action="up" aria-label="上">▲</button>
+          <div class="pad-middle">
+            <button class="pad-btn" data-action="left" aria-label="左">◀</button>
+            <button class="pad-btn pad-center" data-action="wait" aria-label="待機">●</button>
+            <button class="pad-btn" data-action="right" aria-label="右">▶</button>
+          </div>
+          <button class="pad-btn" data-action="down" aria-label="下">▼</button>
+        </div>
+      </div>
+      <div class="main-actions">
+        <button id="confirm-btn" class="action-btn" data-action="confirm" aria-label="決定/探索">◎</button>
+        <button id="menu-btn" class="action-btn" aria-label="メニュー">≡</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="radial-menu" class="radial hidden" role="menu">
+    <div class="radial-core">
+      <button id="radial-cancel" aria-label="キャンセル">×</button>
+      <div class="radial-slots"></div>
+    </div>
   </div>
 
   <div id="menu-overlay" class="overlay hidden" role="dialog" aria-modal="true">
@@ -40,6 +71,51 @@
       <div class="panel-buttons">
         <button id="close-menu" class="secondary">閉じる</button>
       </div>
+    </div>
+  </div>
+
+  <div id="settings-overlay" class="overlay hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <h2>設定</h2>
+      <form id="settings-form">
+        <fieldset>
+          <legend>持ち手</legend>
+          <label><input type="radio" name="hand" value="right" /> 右手</label>
+          <label><input type="radio" name="hand" value="left" /> 左手</label>
+        </fieldset>
+        <label>Dパッドサイズ
+          <select name="dpadSize">
+            <option value="S">S</option>
+            <option value="M">M</option>
+            <option value="L">L</option>
+          </select>
+        </label>
+        <label>Dパッド間隔
+          <input type="range" name="padSpacing" min="8" max="20" step="1" />
+        </label>
+        <label><input type="checkbox" name="haptics" /> タップ時にバイブ</label>
+        <label><input type="checkbox" name="reduceMotion" /> Reduce Motion</label>
+        <label><input type="checkbox" name="highContrast" /> 高コントラスト</label>
+        <label>文字サイズ
+          <input type="range" name="fontScale" min="0.9" max="1.2" step="0.05" />
+        </label>
+        <label>ラジアル半径
+          <input type="range" name="radialRadius" min="120" max="220" step="10" />
+        </label>
+        <label>ラジアル角度
+          <input type="range" name="radialAngle" min="80" max="160" step="5" />
+        </label>
+        <label>スロット数
+          <input type="number" name="slotCount" min="4" max="8" step="1" />
+        </label>
+        <label>親指リーチガイド
+          <input type="checkbox" name="reachGuide" /> 表示
+        </label>
+        <div class="panel-buttons">
+          <button type="button" id="settings-close" class="secondary">閉じる</button>
+          <button type="submit" class="primary">保存</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -71,16 +147,23 @@
     </div>
   </div>
 
-  <div id="tutorial" class="overlay" role="dialog" aria-modal="true">
+  <div id="handedness-overlay" class="overlay" role="dialog" aria-modal="true">
     <div class="panel">
-      <h2>遊び方</h2>
-      <p>画面下のDパッド、スワイプ、またはキーボード(矢印/WASD/スペース)で行動します。</p>
-      <p>1行動ごとに敵も行動します。階段で降りてより深い階層を目指しましょう。</p>
-      <button id="tutorial-close" class="primary">開始</button>
+      <h2>操作する手を選択</h2>
+      <div class="hand-buttons">
+        <button data-hand="right" class="primary">右手</button>
+        <button data-hand="left" class="secondary">左手</button>
+      </div>
     </div>
   </div>
 
-  <div id="toast" class="toast" aria-live="assertive"></div>
+  <div id="tutorial" class="overlay hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <h2>遊び方</h2>
+      <p>画面下のDパッド、スワイプ、タップ移動で冒険しよう。敵はあなたの行動に合わせて動きます。</p>
+      <button id="tutorial-close" class="primary">開始</button>
+    </div>
+  </div>
 
   <script src="main.js"></script>
 </body>

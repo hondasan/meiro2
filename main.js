@@ -1,3 +1,22 @@
+const defaultUISettings = {
+  hand: "right",
+  dpadSize: "M",
+  dpadOffset: { x: 0, y: 0 },
+  haptics: false,
+  reduceMotion: false,
+  highContrast: false,
+  fontScale: 1,
+  radialRadius: 180,
+  radialAngle: 120,
+  slotCount: 8,
+  reachGuide: false,
+  spacing: 8,
+  autoRepeatInitial: 220,
+  autoRepeatInterval: 120,
+};
+
+const UI_STORAGE_KEY = "rogueMobileUI";
+
 const Config = {
   tileSize: 28,
   mapWidth: 61,
@@ -17,9 +36,12 @@ const Config = {
   maxInventory: 20,
   fogRadius: 5,
   graceTurns: 2,
-  swipeThreshold: 30,
-  padDragDelay: 220,
+  swipeThreshold: 26,
+  flickTime: 220,
+  longPressFlickTime: 260,
+  autoMoveDelay: 150,
   xpTable: [0, 25, 55, 95, 145, 205, 275, 360, 450, 560],
+  ui: JSON.parse(JSON.stringify(defaultUISettings)),
 };
 
 const Terrain = {
@@ -84,6 +106,713 @@ const Action = {
   MOVE: "move",
   WAIT: "wait",
 };
+
+function loadUISettings() {
+  const stored = localStorage.getItem(UI_STORAGE_KEY);
+  if (!stored) return JSON.parse(JSON.stringify(defaultUISettings));
+  try {
+    const parsed = JSON.parse(stored);
+    return {
+      ...JSON.parse(JSON.stringify(defaultUISettings)),
+      ...parsed,
+      dpadOffset: {
+        ...defaultUISettings.dpadOffset,
+        ...(parsed?.dpadOffset || {}),
+      },
+    };
+  } catch (err) {
+    console.warn("Failed to parse UI settings", err);
+    return JSON.parse(JSON.stringify(defaultUISettings));
+  }
+}
+
+function saveUISettings(settings) {
+  localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(settings));
+}
+
+class MobileUI {
+  constructor(game) {
+    this.game = game;
+    this.settings = loadUISettings();
+    Config.ui = JSON.parse(JSON.stringify(this.settings));
+
+    this.controlLayer = document.getElementById("control-layer");
+    this.thumbZone = document.getElementById("thumb-zone");
+    this.dpad = document.getElementById("dpad");
+    this.menuBtn = document.getElementById("menu-btn");
+    this.confirmBtn = document.getElementById("confirm-btn");
+    this.reachGuide = document.getElementById("reach-guide");
+    this.touchLayer = document.getElementById("touch-layer");
+    this.radial = document.getElementById("radial-menu");
+    this.radialSlotsContainer = this.radial.querySelector(".radial-slots");
+    this.radialCancel = document.getElementById("radial-cancel");
+    this.radialCore = this.radial.querySelector(".radial-core");
+    this.padPointer = null;
+    this.padCurrentBtn = null;
+    this.padRepeatTimer = null;
+    this.padRepeatInterval = null;
+    this.touchSession = null;
+    this.touchLongPress = null;
+    this.twoFingerWait = false;
+    this.radialActiveSlot = null;
+    this.radialPointerId = null;
+    this.radialActions = this.buildRadialActions();
+
+    this.applySettings();
+    this.setupHandSelection();
+    this.setupStatusBar();
+    this.setupMinimap();
+    this.setupControls();
+    this.setupRadialMenu();
+    this.setupTouchInput();
+    this.setupSettingsPanel();
+    this.observeViewport();
+    this.layout();
+  }
+
+  buildRadialActions() {
+    return [
+      {
+        id: "items",
+        icon: "🎒",
+        label: "アイテム",
+        handler: () => this.game.openInventory(),
+      },
+      {
+        id: "equip",
+        icon: "⚔️",
+        label: "装備変更",
+        handler: () => this.game.quickEquip(),
+      },
+      {
+        id: "throw",
+        icon: "🎯",
+        label: "投擲",
+        handler: () => this.game.prepareThrow(),
+      },
+      {
+        id: "wait",
+        icon: "⏳",
+        label: "足踏み",
+        handler: () => this.game.handleAction(Action.WAIT, "radial"),
+      },
+      {
+        id: "minimap",
+        icon: "🗺️",
+        label: "マップ",
+        handler: () => this.toggleMinimap(),
+      },
+      {
+        id: "autorun",
+        icon: "⚡",
+        label: "オート",
+        handler: () => this.game.toggleAutoRun(),
+      },
+      {
+        id: "food",
+        icon: "🍞",
+        label: "食料",
+        handler: () => this.game.consumeFood(),
+      },
+      {
+        id: "settings",
+        icon: "⚙️",
+        label: "設定",
+        handler: () => this.openSettings(),
+      },
+    ];
+  }
+
+  applySettings() {
+    Config.ui = JSON.parse(JSON.stringify(this.settings));
+    document.body.classList.toggle("high-contrast", !!this.settings.highContrast);
+    document.body.classList.toggle("reduce-motion", !!this.settings.reduceMotion);
+    document.documentElement.style.fontSize = `${16 * (this.settings.fontScale || 1)}px`;
+    document.documentElement.style.setProperty(
+      "--btn-press-scale",
+      this.settings.reduceMotion ? 1 : 0.96
+    );
+    this.settings.spacing = Math.max(8, this.settings.spacing || 8);
+    this.settings.autoRepeatInitial = Number(this.settings.autoRepeatInitial) || defaultUISettings.autoRepeatInitial;
+    this.settings.autoRepeatInterval = Number(this.settings.autoRepeatInterval) || defaultUISettings.autoRepeatInterval;
+    document.documentElement.style.setProperty(
+      "--pad-gap",
+      `${Math.max(8, this.settings.spacing || 8)}px`
+    );
+    this.controlLayer.dataset.hand = this.settings.hand;
+    this.dpad.dataset.size = this.settings.dpadSize;
+    this.reachGuide.classList.toggle("show", !!this.settings.reachGuide);
+    this.updateThumbOffset();
+    this.renderRadialSlots();
+    this.layout();
+  }
+
+  updateThumbOffset() {
+    const clampX = Math.max(-40, Math.min(this.settings.dpadOffset.x || 0, 160));
+    const clampY = Math.max(0, Math.min(this.settings.dpadOffset.y || 0, 180));
+    this.settings.dpadOffset = { x: clampX, y: clampY };
+    this.thumbZone.style.setProperty("--thumb-offset-x", `${clampX}px`);
+    this.thumbZone.style.setProperty("--thumb-offset-y", `${clampY}px`);
+  }
+
+  setupHandSelection() {
+    const overlay = document.getElementById("handedness-overlay");
+    if (this.settings.hand) {
+      overlay.classList.add("hidden");
+    }
+    overlay.querySelectorAll("button[data-hand]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const hand = btn.dataset.hand;
+        this.settings.hand = hand;
+        saveUISettings(this.settings);
+        this.applySettings();
+        overlay.classList.add("hidden");
+      });
+    });
+  }
+
+  setupStatusBar() {
+    const collapse = document.getElementById("status-collapse");
+    const secondary = document.querySelector(".status-secondary");
+    collapse.addEventListener("click", () => {
+      const expanded = collapse.getAttribute("aria-expanded") === "true";
+      collapse.setAttribute("aria-expanded", (!expanded).toString());
+      secondary.hidden = expanded;
+      collapse.textContent = expanded ? "▲" : "▼";
+    });
+  }
+
+  setupMinimap() {
+    const toggle = document.getElementById("minimap-toggle");
+    const container = document.getElementById("minimap-container");
+    toggle.addEventListener("click", () => {
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", (!expanded).toString());
+      container.setAttribute("aria-hidden", expanded ? "true" : "false");
+      if (!expanded) {
+        this.game.drawMinimap();
+      }
+    });
+    container.setAttribute("aria-hidden", "true");
+  }
+
+  setupControls() {
+    this.dpad.querySelectorAll(".pad-btn").forEach((btn) => {
+      btn.addEventListener(
+        "pointerdown",
+        (e) => this.onPadPointerDown(e, btn),
+        { passive: false }
+      );
+    });
+    window.addEventListener(
+      "pointermove",
+      (e) => this.onPadPointerMove(e),
+      { passive: false }
+    );
+    window.addEventListener(
+      "pointerup",
+      (e) => this.onPadPointerUp(e),
+      { passive: false }
+    );
+    window.addEventListener(
+      "pointercancel",
+      (e) => this.onPadPointerUp(e),
+      { passive: false }
+    );
+
+    this.dpad.addEventListener(
+      "pointerdown",
+      (e) => this.beginPadDrag(e),
+      { passive: false }
+    );
+
+    this.confirmBtn.addEventListener("click", () => this.game.confirmAction());
+
+    this.menuBtn.addEventListener("click", (e) => {
+      if (this.menuBtn.dataset.longPress === "true") {
+        this.menuBtn.dataset.longPress = "false";
+        return;
+      }
+      this.game.openInventory();
+    });
+    this.menuBtn.addEventListener(
+      "pointerdown",
+      (e) => {
+        this.menuBtn.dataset.longPress = "false";
+        this.menuLongPress = setTimeout(() => {
+          this.menuBtn.dataset.longPress = "true";
+          const rect = this.menuBtn.getBoundingClientRect();
+          this.openRadial(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        }, 500);
+      },
+      { passive: false }
+    );
+    this.menuBtn.addEventListener(
+      "pointerup",
+      () => {
+        clearTimeout(this.menuLongPress);
+      },
+      { passive: false }
+    );
+    this.menuBtn.addEventListener(
+      "pointercancel",
+      () => {
+        clearTimeout(this.menuLongPress);
+      },
+      { passive: false }
+    );
+  }
+
+  onPadPointerDown(e, btn) {
+    if (this.padPointer !== null) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    this.padPointer = e.pointerId;
+    this.padCurrentBtn = btn;
+    this.triggerPadAction(btn.dataset.action);
+    this.dpad.setPointerCapture?.(e.pointerId);
+    this.padRepeatTimer = setTimeout(() => {
+      this.padRepeatInterval = setInterval(() => {
+        if (this.padCurrentBtn) {
+          this.triggerPadAction(this.padCurrentBtn.dataset.action, true);
+        }
+      }, this.settings.autoRepeatInterval);
+    }, this.settings.autoRepeatInitial);
+  }
+
+  onPadPointerMove(e) {
+    if (this.padPointer !== e.pointerId) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const btn = target?.closest?.(".pad-btn");
+    if (btn && btn !== this.padCurrentBtn) {
+      this.padCurrentBtn = btn;
+      this.triggerPadAction(btn.dataset.action);
+      this.resetPadRepeat();
+    }
+  }
+
+  onPadPointerUp(e) {
+    if (this.padPointer !== e.pointerId) return;
+    this.dpad.releasePointerCapture?.(e.pointerId);
+    this.clearPadRepeat();
+  }
+
+  triggerPadAction(action, isRepeat = false) {
+    if (!action) return;
+    if (!isRepeat) this.hapticPulse();
+    if (action === "wait") {
+      this.game.handleAction(Action.WAIT, "dpad");
+    } else {
+      this.game.handleMove(action, "dpad");
+    }
+  }
+
+  resetPadRepeat() {
+    this.clearPadRepeat(false);
+    this.padRepeatTimer = setTimeout(() => {
+      this.padRepeatInterval = setInterval(() => {
+        if (this.padCurrentBtn) {
+          this.triggerPadAction(this.padCurrentBtn.dataset.action, true);
+        }
+      }, this.settings.autoRepeatInterval);
+    }, this.settings.autoRepeatInitial);
+  }
+
+  clearPadRepeat(clearPointer = true) {
+    clearTimeout(this.padRepeatTimer);
+    clearInterval(this.padRepeatInterval);
+    this.padRepeatTimer = null;
+    this.padRepeatInterval = null;
+    if (clearPointer) {
+      this.padPointer = null;
+      this.padCurrentBtn = null;
+    }
+  }
+
+  beginPadDrag(e) {
+    if (e.target.closest(".pad-btn")) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const start = performance.now();
+    const startOffset = { ...this.settings.dpadOffset };
+    const pointerId = e.pointerId;
+    let moved = false;
+    let allowCycle = false;
+    const holdTimer = setTimeout(() => {
+      allowCycle = true;
+    }, Config.longPressFlickTime);
+    const move = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      const elapsed = performance.now() - start;
+      if (elapsed < Config.longPressFlickTime) return;
+      const hand = this.settings.hand;
+      let offsetX = startOffset.x;
+      if (hand === "right") {
+        offsetX = startOffset.x + (e.clientX - ev.clientX);
+      } else {
+        offsetX = startOffset.x + (ev.clientX - e.clientX);
+      }
+      const offsetY = startOffset.y + (e.clientY - ev.clientY);
+      this.settings.dpadOffset = { x: offsetX, y: offsetY };
+      this.updateThumbOffset();
+      moved = true;
+    };
+    const up = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      clearTimeout(holdTimer);
+      if (!moved && allowCycle) {
+        this.cyclePadSize();
+      } else if (moved) {
+        saveUISettings(this.settings);
+        this.applySettings();
+      }
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up, { passive: false });
+    window.addEventListener("pointercancel", up, { passive: false });
+  }
+
+  cyclePadSize() {
+    const order = ["S", "M", "L"];
+    const current = this.settings.dpadSize || "M";
+    const idx = order.indexOf(current);
+    const next = order[(idx + 1) % order.length];
+    this.settings.dpadSize = next;
+    saveUISettings(this.settings);
+    this.applySettings();
+    this.hapticPulse();
+    this.game.showToast(`Dパッドサイズ: ${next}`);
+  }
+
+  setupRadialMenu() {
+    this.radialCancel.addEventListener("click", () => this.closeRadial());
+    this.radial.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (!this.radial.classList.contains("active")) return;
+        this.radialPointerId = e.pointerId;
+        this.handleRadialPointer(e);
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    this.radial.addEventListener(
+      "pointermove",
+      (e) => {
+        if (this.radialPointerId !== e.pointerId) return;
+        this.handleRadialPointer(e);
+      },
+      { passive: false }
+    );
+    this.radial.addEventListener(
+      "pointerup",
+      (e) => {
+        if (this.radialPointerId !== e.pointerId) return;
+        const active = this.radialActiveSlot;
+        this.closeRadial();
+        if (active) {
+          active.classList.remove("active");
+          const action = active.dataset.action;
+          const entry = this.radialActions.find((a) => a.id === action);
+          entry?.handler?.();
+        }
+      },
+      { passive: false }
+    );
+    this.radial.addEventListener(
+      "pointercancel",
+      () => {
+        this.closeRadial();
+      },
+      { passive: false }
+    );
+  }
+
+  renderRadialSlots() {
+    if (!this.radialSlotsContainer) return;
+    this.radialSlotsContainer.innerHTML = "";
+    const count = Math.min(this.settings.slotCount || 8, this.radialActions.length);
+    const actions = this.radialActions.slice(0, count);
+    actions.forEach((action) => {
+      const slot = document.createElement("div");
+      slot.className = "radial-slot";
+      slot.dataset.action = action.id;
+      slot.innerHTML = `<span>${action.icon}</span><span>${action.label}</span>`;
+      this.radialSlotsContainer.appendChild(slot);
+    });
+  }
+
+  openRadial(x, y) {
+    if (this.radial.classList.contains("active")) return;
+    this.radial.classList.add("active");
+    const viewport = this.getViewport();
+    const bottom = Math.max(0, viewport.height - y);
+    const left = Math.max(0, x);
+    this.radialCore.style.bottom = `${bottom}px`;
+    this.radialCore.style.left = `${left}px`;
+    this.positionRadialSlots();
+    this.radialActiveSlot = null;
+  }
+
+  closeRadial() {
+    this.radialPointerId = null;
+    this.radialActiveSlot?.classList.remove("active");
+    this.radialActiveSlot = null;
+    this.radial.classList.remove("active");
+  }
+
+  positionRadialSlots() {
+    const radius = this.settings.radialRadius || 180;
+    const angleSpan = this.settings.radialAngle || 120;
+    const slots = Array.from(this.radialSlotsContainer.children);
+    const count = slots.length;
+    if (!count) return;
+    const hand = this.settings.hand;
+    const startAngle = hand === "right" ? -angleSpan : 180 + angleSpan;
+    const step = count > 1 ? angleSpan / (count - 1) : 0;
+    slots.forEach((slot, index) => {
+      const angleDeg = hand === "right" ? startAngle + step * index : startAngle - step * index;
+      const angleRad = (angleDeg * Math.PI) / 180;
+      const tx = Math.cos(angleRad) * radius;
+      const ty = Math.sin(angleRad) * radius;
+      slot.style.transform = `translate(${tx}px, ${ty}px)`;
+    });
+  }
+
+  handleRadialPointer(e) {
+    const rect = this.radialCore.getBoundingClientRect();
+    const cx = rect.left;
+    const cy = rect.bottom;
+    const dx = e.clientX - cx;
+    const dy = cy - e.clientY;
+    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+    const slots = Array.from(this.radialSlotsContainer.children);
+    if (!slots.length) return;
+    let closest = null;
+    let minDiff = Infinity;
+    slots.forEach((slot) => {
+      const transform = slot.style.transform;
+      const match = /translate\(([-0-9.]+)px,\s*([-0-9.]+)px\)/.exec(transform);
+      if (!match) return;
+      const sx = parseFloat(match[1]);
+      const sy = parseFloat(match[2]);
+      const sa = (Math.atan2(-sy, sx) * 180) / Math.PI;
+      let diff = Math.abs(sa - angle);
+      if (diff > 180) diff = 360 - diff;
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = slot;
+      }
+    });
+    if (closest && closest !== this.radialActiveSlot) {
+      this.radialActiveSlot?.classList.remove("active");
+      closest.classList.add("active");
+      this.radialActiveSlot = closest;
+    }
+  }
+
+  setupTouchInput() {
+    this.touchLayer.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (this.radial.classList.contains("active")) return;
+        if (this.padPointer !== null) return;
+        if (this.touchSession) return;
+        this.touchSession = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startTime: performance.now(),
+        };
+        this.touchLongPress = setTimeout(() => {
+          if (this.isInBottomZone(e.clientX, e.clientY)) {
+            this.openRadial(e.clientX, e.clientY);
+          }
+        }, 480);
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    this.touchLayer.addEventListener(
+      "pointermove",
+      (e) => {
+        if (!this.touchSession || this.touchSession.pointerId !== e.pointerId) return;
+        const dx = e.clientX - this.touchSession.startX;
+        const dy = e.clientY - this.touchSession.startY;
+        if (Math.hypot(dx, dy) > 12) {
+          clearTimeout(this.touchLongPress);
+        }
+      },
+      { passive: false }
+    );
+    this.touchLayer.addEventListener(
+      "pointerup",
+      (e) => {
+        if (!this.touchSession || this.touchSession.pointerId !== e.pointerId) return;
+        clearTimeout(this.touchLongPress);
+        const session = this.touchSession;
+        this.touchSession = null;
+        if (this.twoFingerWait) {
+          this.twoFingerWait = false;
+          return;
+        }
+        const dx = e.clientX - session.startX;
+        const dy = e.clientY - session.startY;
+        const dist = Math.hypot(dx, dy);
+        const elapsed = performance.now() - session.startTime;
+        if (dist < Config.swipeThreshold) {
+          this.handleTap(e.clientX, e.clientY);
+        } else {
+          const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up";
+          if (elapsed < Config.flickTime) {
+            this.game.handleMove(dir, "swipe");
+          } else {
+            this.game.startAutoRun(dir);
+          }
+        }
+      },
+      { passive: false }
+    );
+    this.touchLayer.addEventListener(
+      "pointercancel",
+      () => {
+        clearTimeout(this.touchLongPress);
+        this.touchSession = null;
+      },
+      { passive: false }
+    );
+
+    this.touchLayer.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length === 2) {
+          e.preventDefault();
+          this.twoFingerWait = true;
+          this.touchSession = null;
+          clearTimeout(this.touchLongPress);
+        }
+      },
+      { passive: false }
+    );
+    this.touchLayer.addEventListener(
+      "touchend",
+      (e) => {
+        if (this.twoFingerWait && e.touches.length === 0) {
+          this.game.handleAction(Action.WAIT, "twofinger");
+          this.twoFingerWait = false;
+        }
+      }
+    );
+  }
+
+  handleTap(clientX, clientY) {
+    if (this.radial.classList.contains("active")) return;
+    const rect = this.game.canvas.getBoundingClientRect();
+    const scaleX = this.game.canvas.width / rect.width;
+    const scaleY = this.game.canvas.height / rect.height;
+    const px = (clientX - rect.left) * scaleX / window.devicePixelRatio;
+    const py = (clientY - rect.top) * scaleY / window.devicePixelRatio;
+    this.game.handleTapMove(px, py);
+  }
+
+  isInBottomZone(x, y) {
+    const viewport = this.getViewport();
+    return y > viewport.height - 160;
+  }
+
+  setupSettingsPanel() {
+    const overlay = document.getElementById("settings-overlay");
+    const form = document.getElementById("settings-form");
+    const closeBtn = document.getElementById("settings-close");
+    form.hand.value = this.settings.hand;
+    form.dpadSize.value = this.settings.dpadSize;
+    form.padSpacing.value = this.settings.spacing;
+    form.haptics.checked = !!this.settings.haptics;
+    form.reduceMotion.checked = !!this.settings.reduceMotion;
+    form.highContrast.checked = !!this.settings.highContrast;
+    form.fontScale.value = this.settings.fontScale;
+    form.radialRadius.value = this.settings.radialRadius;
+    form.radialAngle.value = this.settings.radialAngle;
+    form.slotCount.value = this.settings.slotCount;
+    form.reachGuide.checked = !!this.settings.reachGuide;
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      this.settings.hand = form.hand.value;
+      this.settings.dpadSize = form.dpadSize.value;
+      this.settings.spacing = parseInt(form.padSpacing.value, 10) || this.settings.spacing;
+      this.settings.haptics = form.haptics.checked;
+      this.settings.reduceMotion = form.reduceMotion.checked;
+      this.settings.highContrast = form.highContrast.checked;
+      this.settings.fontScale = parseFloat(form.fontScale.value) || 1;
+      this.settings.radialRadius = parseInt(form.radialRadius.value, 10) || this.settings.radialRadius;
+      this.settings.radialAngle = parseInt(form.radialAngle.value, 10) || this.settings.radialAngle;
+      this.settings.slotCount = Math.max(4, Math.min(8, parseInt(form.slotCount.value, 10) || 8));
+      this.settings.reachGuide = form.reachGuide.checked;
+      saveUISettings(this.settings);
+      this.applySettings();
+      overlay.classList.add("hidden");
+    });
+    closeBtn.addEventListener("click", () => overlay.classList.add("hidden"));
+  }
+
+  openSettings() {
+    const overlay = document.getElementById("settings-overlay");
+    const form = document.getElementById("settings-form");
+    form.hand.value = this.settings.hand;
+    form.dpadSize.value = this.settings.dpadSize;
+    form.padSpacing.value = this.settings.spacing;
+    form.haptics.checked = !!this.settings.haptics;
+    form.reduceMotion.checked = !!this.settings.reduceMotion;
+    form.highContrast.checked = !!this.settings.highContrast;
+    form.fontScale.value = this.settings.fontScale;
+    form.radialRadius.value = this.settings.radialRadius;
+    form.radialAngle.value = this.settings.radialAngle;
+    form.slotCount.value = this.settings.slotCount;
+    form.reachGuide.checked = !!this.settings.reachGuide;
+    overlay.classList.remove("hidden");
+  }
+
+  toggleMinimap() {
+    const toggle = document.getElementById("minimap-toggle");
+    const expanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+    const container = document.getElementById("minimap-container");
+    container.setAttribute("aria-hidden", (!expanded).toString());
+    if (!expanded) {
+      this.game.drawMinimap();
+    }
+  }
+
+  hapticPulse() {
+    if (!this.settings.haptics) return;
+    if (navigator.vibrate) {
+      navigator.vibrate(12);
+    }
+  }
+
+  observeViewport() {
+    window.addEventListener("resize", () => this.layout());
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => this.layout());
+    }
+  }
+
+  layout() {
+    this.updateThumbOffset();
+    this.positionRadialSlots();
+  }
+
+  getViewport() {
+    if (window.visualViewport) {
+      return { width: window.visualViewport.width, height: window.visualViewport.height };
+    }
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
+}
 
 function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -577,6 +1306,11 @@ class Game {
     this.playerSlowGate = false;
     this.visualViewport = window.visualViewport;
     this.logMessages = [];
+    this.autoPath = [];
+    this.autoRunDirection = null;
+    this.autoTimer = null;
+    this.lastDirection = null;
+    this.visited = new Set();
 
     this.resizeCanvas = this.resizeCanvas.bind(this);
     window.addEventListener("resize", this.resizeCanvas);
@@ -597,7 +1331,6 @@ class Game {
       this.startNewRun();
     });
 
-    document.getElementById("pad-menu").addEventListener("click", () => this.openInventory());
     document.getElementById("close-menu").addEventListener("click", () => this.closeInventory());
 
     document.getElementById("ranking-button").addEventListener("click", () => this.showRanking());
@@ -623,8 +1356,6 @@ class Game {
       this.showRanking();
     });
 
-    document.getElementById("pad-toggle").addEventListener("click", () => this.cyclePadState());
-    this.initPadDrag();
   }
 
   resizeCanvas() {
@@ -645,6 +1376,8 @@ class Game {
     this.turn = 0;
     this.playerSlowGate = false;
     this.logMessages = [];
+    this.clearAutomation();
+    this.lastDirection = null;
     this.generateFloor();
     this.updateHUD();
     this.draw();
@@ -660,6 +1393,7 @@ class Game {
     const stairsRoom = this.rooms[this.rooms.length - 1];
     this.map[stairsRoom.center.y][stairsRoom.center.x].terrain = Terrain.STAIRS;
     this.player = new Player(startRoom.center.x, startRoom.center.y);
+    this.visited = new Set([key(this.player.x, this.player.y)]);
     this.entities = [this.player];
     this.items = [];
     this.recalculateStats();
@@ -789,119 +1523,28 @@ class Game {
       }
     });
 
-    const dpad = document.getElementById("dpad");
-    dpad.querySelectorAll(".pad-btn").forEach((btn) => {
-      btn.addEventListener(
-        "pointerdown",
-        (e) => {
-          e.preventDefault();
-          const action = btn.dataset.action;
-          if (action === "wait") {
-            this.handleAction(Action.WAIT);
-          } else {
-            this.handleMove(action);
-          }
-        },
-        { passive: false }
-      );
-    });
-
-    this.initSwipe();
   }
 
-  initPadDrag() {
-    const dpad = document.getElementById("dpad");
-    let dragging = false;
-    let offset = { x: 0, y: 0 };
-    let timer = null;
-
-    const start = (e) => {
-      if (e.target.closest(".pad-btn") || e.target.id === "pad-menu") return;
-      timer = setTimeout(() => {
-        dragging = true;
-        const rect = dpad.getBoundingClientRect();
-        offset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        dpad.style.transition = "none";
-      }, Config.padDragDelay);
-    };
-
-    const move = (e) => {
-      if (!dragging) return;
-      const x = e.clientX - offset.x;
-      const y = e.clientY - offset.y;
-      dpad.style.left = `${x + dpad.offsetWidth / 2}px`;
-      dpad.style.top = `${y}px`;
-      dpad.style.bottom = "auto";
-      dpad.style.transform = "translate(-50%, 0)";
-    };
-
-    const end = () => {
-      clearTimeout(timer);
-      timer = null;
-      dragging = false;
-      dpad.style.transition = "";
-    };
-
-    dpad.addEventListener("pointerdown", start);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
-  }
-
-  initSwipe() {
-    let start = null;
-    document.body.addEventListener(
-      "touchstart",
-      (e) => {
-        if (e.touches.length !== 1) return;
-        start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      },
-      { passive: true }
-    );
-    document.body.addEventListener(
-      "touchend",
-      (e) => {
-        if (!start) return;
-        const touch = e.changedTouches[0];
-        const dx = touch.clientX - start.x;
-        const dy = touch.clientY - start.y;
-        if (Math.abs(dx) < Config.swipeThreshold && Math.abs(dy) < Config.swipeThreshold) {
-          this.handleAction(Action.WAIT);
-        } else if (Math.abs(dx) > Math.abs(dy)) {
-          this.handleMove(dx > 0 ? "right" : "left");
-        } else {
-          this.handleMove(dy > 0 ? "down" : "up");
-        }
-        start = null;
-      },
-      { passive: true }
-    );
-  }
-
-  cyclePadState() {
-    const dpad = document.getElementById("dpad");
-    const toggle = document.getElementById("pad-toggle");
-    const order = ["full", "compact", "hidden"];
-    const current = dpad.dataset.size || "full";
-    const idx = order.indexOf(current);
-    const next = order[(idx + 1) % order.length];
-    dpad.dataset.size = next;
-    toggle.dataset.visibility = next;
-    if (next === "hidden") {
-      dpad.style.display = "none";
-    } else {
-      dpad.style.display = "flex";
-    }
-  }
-
-  handleMove(dirKey) {
+  handleMove(dirKey, source = "manual") {
     if (this.state !== "running") return;
+    const isAuto = source === "auto" || source === "autoRun";
+
+    if (!isAuto) {
+      this.clearAutomation();
+    }
+
     if (this.pendingThrow) {
+      if (isAuto) {
+        this.clearAutomation();
+        return;
+      }
       const dir = this.player.effects.reverse > 0 ? this.getReversedDirection(dirKey) : dirKey;
       this.performThrow(Directions[dir]);
       return;
     }
+
     if (this.player.effects.snare > 0) {
+      if (isAuto) this.clearAutomation();
       this.pushMessage("罠に拘束されて動けない…");
       this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
       this.endPlayerTurn();
@@ -926,13 +1569,20 @@ class Game {
     }
     const dir = Directions[effectiveDir];
     if (!dir) return;
+
     const nx = this.player.x + dir.x;
     const ny = this.player.y + dir.y;
     const tile = this.map[ny]?.[nx];
     if (!tile || !tile.isWalkable()) {
-      this.pushMessage("壁が行く手を阻む。");
+      if (isAuto) {
+        this.clearAutomation();
+        this.showToast("進行が止まった");
+      } else {
+        this.pushMessage("壁が行く手を阻む。");
+      }
       return;
     }
+
     const enemy = this.entities.find((e) => e !== this.player && e.x === nx && e.y === ny && e.isAlive());
     if (enemy) {
       this.resolveCombat(this.player, enemy);
@@ -941,11 +1591,27 @@ class Game {
         this.entities = this.entities.filter((e) => e.isAlive());
         this.gainExp(10 + this.depth * 2);
       }
+      if (isAuto) this.clearAutomation();
       this.endPlayerTurn();
       return;
     }
+
+    const targetKey = key(nx, ny);
+    const wasVisited = this.visited.has(targetKey);
+    const trapAhead = tile.trap && tile.trap.armed;
+
     this.player.x = nx;
     this.player.y = ny;
+    this.lastDirection = effectiveDir;
+    this.visited.add(targetKey);
+
+    if (isAuto) {
+      if (trapAhead || !wasVisited || this.isBranchTile(nx, ny) || tile.terrain === Terrain.STAIRS) {
+        this.clearAutomation();
+        this.showToast("様子を伺って立ち止まった");
+      }
+    }
+
     this.handleTileEffects(tile);
     this.endPlayerTurn();
   }
@@ -958,8 +1624,11 @@ class Game {
     return dirKey;
   }
 
-  handleAction(action) {
+  handleAction(action, source = "manual") {
     if (this.state !== "running") return;
+    if (source !== "auto" && source !== "autoRun") {
+      this.clearAutomation();
+    }
     if (action === Action.WAIT) {
       if (this.player.effects.snare > 0) {
         this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
@@ -967,6 +1636,245 @@ class Game {
       this.pushMessage("私は身構えて様子を伺った。");
       this.endPlayerTurn();
     }
+  }
+
+  clearAutomation() {
+    this.autoPath = [];
+    this.autoRunDirection = null;
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer);
+      this.autoTimer = null;
+    }
+  }
+
+  scheduleAutomation() {
+    if (this.autoTimer || this.state !== "running") return;
+    if (!this.autoPath.length && !this.autoRunDirection) return;
+    this.autoTimer = setTimeout(() => {
+      this.autoTimer = null;
+      if (this.state !== "running") return;
+      if (this.autoPath.length) {
+        const next = this.autoPath.shift();
+        if (!next) {
+          this.clearAutomation();
+          return;
+        }
+        const dx = next.x - this.player.x;
+        const dy = next.y - this.player.y;
+        const dir = this.directionFromDelta(dx, dy);
+        if (dir) {
+          this.handleMove(dir, "auto");
+        } else {
+          this.clearAutomation();
+        }
+      } else if (this.autoRunDirection) {
+        this.handleMove(this.autoRunDirection, "autoRun");
+      }
+    }, Config.autoMoveDelay);
+  }
+
+  startAutoRun(direction) {
+    if (this.state !== "running") return;
+    if (this.pendingThrow) {
+      this.showToast("投擲中は移動できない");
+      return;
+    }
+    this.autoPath = [];
+    this.autoRunDirection = direction;
+    this.lastDirection = direction;
+    this.scheduleAutomation();
+    this.showToast("オートラン開始");
+  }
+
+  toggleAutoRun() {
+    if (this.autoRunDirection) {
+      this.clearAutomation();
+      this.showToast("オートラン停止");
+      return;
+    }
+    if (!this.lastDirection) {
+      this.showToast("先に進む方向を入力して");
+      return;
+    }
+    this.startAutoRun(this.lastDirection);
+  }
+
+  directionFromDelta(dx, dy) {
+    if (dx === 1 && dy === 0) return "right";
+    if (dx === -1 && dy === 0) return "left";
+    if (dx === 0 && dy === 1) return "down";
+    if (dx === 0 && dy === -1) return "up";
+    return null;
+  }
+
+  walkableNeighborsCount(x, y) {
+    let count = 0;
+    for (const dir of Object.values(Directions)) {
+      const nx = x + dir.x;
+      const ny = y + dir.y;
+      const tile = this.map[ny]?.[nx];
+      if (tile && tile.isWalkable()) count++;
+    }
+    return count;
+  }
+
+  isBranchTile(x, y) {
+    return this.walkableNeighborsCount(x, y) >= 3;
+  }
+
+  handleTapMove(px, py) {
+    if (this.state !== "running") return;
+    if (this.pendingThrow) {
+      this.showToast("先に投擲方向を選ぼう");
+      return;
+    }
+    this.clearAutomation();
+    const tileSize = Config.tileSize;
+    const width = this.canvas.width / window.devicePixelRatio;
+    const height = this.canvas.height / window.devicePixelRatio;
+    const offsetX = (width - this.map[0].length * tileSize) / 2;
+    const offsetY = (height - this.map.length * tileSize) / 2;
+    const tx = Math.floor((px - offsetX) / tileSize);
+    const ty = Math.floor((py - offsetY) / tileSize);
+    if (tx === this.player.x && ty === this.player.y) {
+      this.confirmAction();
+      return;
+    }
+    if (tx < 0 || ty < 0 || ty >= this.map.length || tx >= this.map[0].length) return;
+    const tile = this.map[ty]?.[tx];
+    if (!tile || !tile.isWalkable()) {
+      this.showToast("そこへは進めない");
+      return;
+    }
+    const path = this.findPathTo({ x: tx, y: ty });
+    if (!path || path.length <= 1) {
+      this.showToast("経路がない");
+      return;
+    }
+    this.autoPath = path.slice(1);
+    this.autoRunDirection = null;
+    this.scheduleAutomation();
+    this.showToast("目的地へ移動開始");
+  }
+
+  prepareThrow() {
+    if (this.pendingThrow) {
+      this.showToast("投擲準備中");
+      return;
+    }
+    this.clearAutomation();
+    const stone = this.player.inventory.find((item) => item.type === ItemType.STONE);
+    if (!stone) {
+      this.showToast("投げられる物がない");
+      return;
+    }
+    this.pendingThrow = stone;
+    this.pushMessage("投げたい方向を選ぼう。");
+    this.showToast("方向入力で投擲");
+  }
+
+  quickEquip() {
+    this.clearAutomation();
+    const swords = this.player.inventory.filter((item) => item.type === ItemType.SWORD);
+    const shields = this.player.inventory.filter((item) => item.type === ItemType.SHIELD);
+    let equipped = false;
+    if (swords.length) {
+      const bestSword = swords.reduce((best, item) => (item.bonus > (best?.bonus ?? -Infinity) ? item : best), null);
+      if (bestSword) {
+        this.equipItem(bestSword);
+        equipped = true;
+      }
+    }
+    if (shields.length) {
+      const bestShield = shields.reduce((best, item) => (item.bonus > (best?.bonus ?? -Infinity) ? item : best), null);
+      if (bestShield) {
+        this.equipItem(bestShield);
+        equipped = true;
+      }
+    }
+    if (equipped) {
+      this.showToast("装備を整えた");
+      this.updateHUD();
+    } else {
+      this.showToast("装備できる物がない");
+    }
+  }
+
+  consumeFood() {
+    const food = this.player.inventory.find((item) => item.type === ItemType.BREAD);
+    if (!food) {
+      this.showToast("食料がない");
+      return;
+    }
+    this.clearAutomation();
+    this.useItem(food);
+  }
+
+  confirmAction() {
+    this.clearAutomation();
+    const tile = this.map[this.player.y][this.player.x];
+    if (!tile) return;
+    if (tile.terrain === Terrain.STAIRS) {
+      this.pushMessage("階段を慎重に降りた。");
+      this.nextFloor();
+      return;
+    }
+    let disarmed = false;
+    for (const dy of [-1, 0, 1]) {
+      for (const dx of [-1, 0, 1]) {
+        const nx = this.player.x + dx;
+        const ny = this.player.y + dy;
+        const target = this.map[ny]?.[nx];
+        if (target?.trap && target.trap.armed) {
+          target.trap.armed = false;
+          disarmed = true;
+        }
+      }
+    }
+    if (disarmed) {
+      this.pushMessage("足元の罠を見つけて解除した！");
+    } else {
+      this.pushMessage("周囲を警戒したが異常はなさそうだ。");
+    }
+    this.endPlayerTurn();
+  }
+
+  drawMinimap(force = false) {
+    const canvas = document.getElementById("minimap");
+    const container = document.getElementById("minimap-container");
+    if (!canvas || !this.map) return;
+    if (!force && container?.getAttribute("aria-hidden") === "true") return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const displayW = canvas.clientWidth || canvas.width;
+    const displayH = canvas.clientHeight || canvas.height;
+    if (canvas.width !== Math.floor(displayW * dpr) || canvas.height !== Math.floor(displayH * dpr)) {
+      canvas.width = Math.floor(displayW * dpr);
+      canvas.height = Math.floor(displayH * dpr);
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(dpr, dpr);
+    const cols = this.map[0].length;
+    const rows = this.map.length;
+    const cellW = displayW / cols;
+    const cellH = displayH / rows;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const tile = this.map[y][x];
+        if (!tile) continue;
+        let color = "#0f172a";
+        if (tile.terrain === Terrain.ROOM) color = "#1f2a44";
+        else if (tile.terrain === Terrain.FLOOR) color = "#162238";
+        else if (tile.terrain === Terrain.STAIRS) color = "#2f4f6f";
+        ctx.fillStyle = color;
+        ctx.fillRect(x * cellW, y * cellH, cellW, cellH);
+      }
+    }
+    ctx.fillStyle = "#60a5fa";
+    ctx.fillRect(this.player.x * cellW, this.player.y * cellH, cellW, cellH);
+    ctx.restore();
   }
 
   handleTileEffects(tile) {
@@ -1028,6 +1936,7 @@ class Game {
     this.updateHUD();
     this.processEnemies();
     this.draw();
+    this.scheduleAutomation();
   }
 
   processItemsOnTile() {
@@ -1137,6 +2046,39 @@ class Game {
     return null;
   }
 
+  findPathTo(goal) {
+    const start = { x: this.player.x, y: this.player.y };
+    const frontier = [start];
+    const visited = new Set([key(start.x, start.y)]);
+    const parent = new Map();
+    while (frontier.length) {
+      const current = frontier.shift();
+      if (current.x === goal.x && current.y === goal.y) {
+        const path = [];
+        let node = key(goal.x, goal.y);
+        while (node) {
+          const [nx, ny] = node.split(",").map(Number);
+          path.unshift({ x: nx, y: ny });
+          node = parent.get(node) || null;
+        }
+        return path;
+      }
+      for (const dir of Object.values(Directions)) {
+        const nx = current.x + dir.x;
+        const ny = current.y + dir.y;
+        const tile = this.map[ny]?.[nx];
+        if (!tile || !tile.isWalkable()) continue;
+        if (this.entities.some((e) => e !== this.player && e.isAlive() && e.x === nx && e.y === ny)) continue;
+        const k = key(nx, ny);
+        if (visited.has(k)) continue;
+        visited.add(k);
+        parent.set(k, key(current.x, current.y));
+        frontier.push({ x: nx, y: ny });
+      }
+    }
+    return null;
+  }
+
   wander(enemy) {
     for (const dir of shuffle(Object.values(Directions))) {
       const nx = enemy.x + dir.x;
@@ -1209,6 +2151,7 @@ class Game {
   }
 
   openInventory() {
+    this.clearAutomation();
     const overlay = document.getElementById("menu-overlay");
     const list = document.getElementById("inventory-list");
     list.innerHTML = "";
@@ -1397,7 +2340,8 @@ class Game {
   pushMessage(message) {
     this.logMessages.push(message);
     if (this.logMessages.length > 8) this.logMessages.shift();
-    this.messageLog.innerHTML = this.logMessages.map((m) => `<p>${m}</p>`).join("");
+    const recent = this.logMessages.slice(-2);
+    this.messageLog.innerHTML = recent.map((m) => `<p>${m}</p>`).join("");
   }
 
   showToast(text) {
@@ -1453,6 +2397,7 @@ class Game {
       ctx.fillText(symbol, px + 4, py + 2);
     }
     ctx.restore();
+    this.drawMinimap();
   }
 
   drawTile(ctx, tile, x, y, size, visible) {
@@ -1523,6 +2468,7 @@ class Game {
   }
 
   nextFloor() {
+    this.clearAutomation();
     this.depth++;
     this.playerSlowGate = false;
     this.pushMessage(`${this.depth}Fへ降りた。敵が強くなっている…`);
@@ -1532,6 +2478,7 @@ class Game {
   }
 
   gameOver(reason) {
+    this.clearAutomation();
     this.state = "result";
     document.getElementById("result-floor").textContent = `${this.depth}F`;
     document.getElementById("result-kills").textContent = this.player.kills;
@@ -1579,6 +2526,7 @@ class Game {
 }
 
 const game = new Game();
+const mobileUI = new MobileUI(game);
 
 window.game = game;
 
