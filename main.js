@@ -44,6 +44,21 @@ const Config = {
   ui: JSON.parse(JSON.stringify(defaultUISettings)),
 };
 
+const MAP_SIZE_OPTIONS = [
+  { cols: 61, rows: 61 },
+  { cols: 51, rows: 51 },
+  { cols: 45, rows: 45 },
+  { cols: 39, rows: 39 },
+  { cols: 33, rows: 33 },
+  { cols: 27, rows: 27 },
+  { cols: 25, rows: 25 },
+  { cols: 21, rows: 21 },
+  { cols: 19, rows: 19 },
+  { cols: 17, rows: 17 },
+];
+
+const MIN_TILE_SIZE = 18;
+
 const Terrain = {
   WALL: "wall",
   ROOM: "room",
@@ -136,7 +151,9 @@ class MobileUI {
     this.settings = loadUISettings();
     Config.ui = JSON.parse(JSON.stringify(this.settings));
 
-    this.controlLayer = document.getElementById("control-layer");
+    this.stage = document.getElementById("stage");
+    this.padDock = document.getElementById("pad-dock");
+    this.dockInner = this.padDock?.querySelector?.(".dock-inner");
     this.thumbZone = document.getElementById("thumb-zone");
     this.dpad = document.getElementById("dpad");
     this.menuBtn = document.getElementById("menu-btn");
@@ -239,7 +256,9 @@ class MobileUI {
       "--pad-gap",
       `${Math.max(8, this.settings.spacing || 8)}px`
     );
-    this.controlLayer.dataset.hand = this.settings.hand;
+    if (this.padDock) {
+      this.padDock.dataset.hand = this.settings.hand;
+    }
     this.dpad.dataset.size = this.settings.dpadSize;
     this.reachGuide.classList.toggle("show", !!this.settings.reachGuide);
     this.updateThumbOffset();
@@ -548,11 +567,17 @@ class MobileUI {
   openRadial(x, y) {
     if (this.radial.classList.contains("active")) return;
     this.radial.classList.add("active");
-    const viewport = this.getViewport();
-    const bottom = Math.max(0, viewport.height - y);
-    const left = Math.max(0, x);
-    this.radialCore.style.bottom = `${bottom}px`;
-    this.radialCore.style.left = `${left}px`;
+    const dockRect = this.padDock?.getBoundingClientRect();
+    if (dockRect) {
+      const safeBottom = this.getSafeBottom();
+      const bottom = Math.max(0, dockRect.bottom - y - safeBottom);
+      const left = Math.max(0, x - dockRect.left);
+      this.radialCore.style.bottom = `${bottom}px`;
+      this.radialCore.style.left = `${left}px`;
+    } else {
+      this.radialCore.style.bottom = "0px";
+      this.radialCore.style.left = "0px";
+    }
     this.positionRadialSlots();
     this.radialActiveSlot = null;
   }
@@ -720,7 +745,9 @@ class MobileUI {
 
   isInBottomZone(x, y) {
     const viewport = this.getViewport();
-    return y > viewport.height - 160;
+    const padHeight = this.getPadHeight();
+    const safeBottom = this.getSafeBottom();
+    return y >= viewport.height - (padHeight + safeBottom);
   }
 
   setupSettingsPanel() {
@@ -802,8 +829,32 @@ class MobileUI {
   }
 
   layout() {
+    this.dockInner = this.padDock?.querySelector?.(".dock-inner");
     this.updateThumbOffset();
-    this.positionRadialSlots();
+    const viewport = this.getViewport();
+    const isMobile = viewport.width <= 960 || viewport.height <= 820;
+    if (this.padDock) {
+      this.padDock.dataset.hand = this.settings.hand;
+    }
+    document.body.classList.toggle("dock-active", isMobile);
+    if (!isMobile) {
+      document.documentElement.style.setProperty("--pad-h", "0px");
+      this.game.resizeCanvas();
+      this.positionRadialSlots();
+      return;
+    }
+    document.documentElement.style.setProperty("--pad-h", "0px");
+    requestAnimationFrame(() => {
+      let padHeight = 0;
+      if (this.dockInner) {
+        padHeight = this.dockInner.offsetHeight;
+      } else if (this.padDock) {
+        padHeight = Math.max(0, this.padDock.offsetHeight - this.getSafeBottom());
+      }
+      document.documentElement.style.setProperty("--pad-h", `${padHeight}px`);
+      this.game.resizeCanvas();
+      this.positionRadialSlots();
+    });
   }
 
   getViewport() {
@@ -811,6 +862,18 @@ class MobileUI {
       return { width: window.visualViewport.width, height: window.visualViewport.height };
     }
     return { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  getSafeBottom() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue("--safe-bottom");
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  getPadHeight() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue("--pad-h");
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 }
 
@@ -1292,6 +1355,9 @@ class Game {
   constructor() {
     this.canvas = document.getElementById("game-canvas");
     this.ctx = this.canvas.getContext("2d");
+    this.stageElement = document.getElementById("stage");
+    this.stageWidth = this.stageElement?.clientWidth || window.innerWidth;
+    this.stageHeight = this.stageElement?.clientHeight || window.innerHeight;
     this.messageLog = document.getElementById("message-log");
     this.toast = document.getElementById("toast");
     this.depth = 1;
@@ -1359,12 +1425,44 @@ class Game {
   }
 
   resizeCanvas() {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    this.canvas.width = width * window.devicePixelRatio;
-    this.canvas.height = height * window.devicePixelRatio;
-    this.ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
-    this.draw();
+    if (!this.canvas) return;
+    this.stageElement = document.getElementById("stage") || this.stageElement;
+    const width = this.stageElement?.clientWidth || window.innerWidth;
+    const height = this.stageElement?.clientHeight || window.innerHeight;
+    this.stageWidth = width;
+    this.stageHeight = height;
+    const ratio = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.round(width * ratio));
+    this.canvas.height = Math.max(1, Math.round(height * ratio));
+    this.ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const layout = this.determineMapLayout(width, height);
+    const mapChanged = Config.mapWidth !== layout.cols || Config.mapHeight !== layout.rows;
+    Config.mapWidth = layout.cols;
+    Config.mapHeight = layout.rows;
+    Config.tileSize = layout.tile;
+    if (mapChanged && this.map) {
+      this.clearAutomation();
+      this.pendingThrow = null;
+      this.generateFloor({ preservePlayer: true });
+      this.updateHUD();
+    }
+    if (this.map) {
+      this.draw();
+    }
+  }
+
+  determineMapLayout(width, height) {
+    const w = Math.max(1, width);
+    const h = Math.max(1, height);
+    for (const option of MAP_SIZE_OPTIONS) {
+      const tile = Math.floor(Math.min(w / option.cols, h / option.rows));
+      if (tile >= MIN_TILE_SIZE) {
+        return { cols: option.cols, rows: option.rows, tile };
+      }
+    }
+    const last = MAP_SIZE_OPTIONS[MAP_SIZE_OPTIONS.length - 1];
+    const tile = Math.max(8, Math.floor(Math.min(w / last.cols, h / last.rows)));
+    return { cols: last.cols, rows: last.rows, tile };
   }
 
   showTutorial() {
@@ -1380,11 +1478,12 @@ class Game {
     this.lastDirection = null;
     this.generateFloor();
     this.updateHUD();
-    this.draw();
+    this.resizeCanvas();
     this.pushMessage("地下1Fに降り立った。周囲を探索しよう。");
   }
 
-  generateFloor() {
+  generateFloor(options = {}) {
+    const preservePlayer = !!options.preservePlayer && !!this.player;
     const generator = new DungeonGenerator(Config.mapWidth, Config.mapHeight, this.depth);
     const result = generator.generate();
     this.map = result.tiles;
@@ -1392,7 +1491,12 @@ class Game {
     const startRoom = this.rooms[0];
     const stairsRoom = this.rooms[this.rooms.length - 1];
     this.map[stairsRoom.center.y][stairsRoom.center.x].terrain = Terrain.STAIRS;
-    this.player = new Player(startRoom.center.x, startRoom.center.y);
+    if (preservePlayer) {
+      this.player.x = startRoom.center.x;
+      this.player.y = startRoom.center.y;
+    } else {
+      this.player = new Player(startRoom.center.x, startRoom.center.y);
+    }
     this.visited = new Set([key(this.player.x, this.player.y)]);
     this.entities = [this.player];
     this.items = [];
@@ -1401,7 +1505,10 @@ class Game {
     this.populateItems();
     this.populateTraps();
     this.spawnEnemies(startRoom.center);
-    this.turn = 0;
+    if (!preservePlayer) {
+      this.turn = 0;
+    }
+    this.playerSlowGate = false;
   }
 
   randomFloorTile(options = {}) {
@@ -2474,7 +2581,7 @@ class Game {
     this.pushMessage(`${this.depth}Fへ降りた。敵が強くなっている…`);
     this.generateFloor();
     this.updateHUD();
-    this.draw();
+    this.resizeCanvas();
   }
 
   gameOver(reason) {
