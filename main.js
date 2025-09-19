@@ -1,2629 +1,1595 @@
-(() => {
-  'use strict';
-
-  /**
-   * @typedef {Object} Vec2
-   * @property {number} x
-   * @property {number} y
-   */
-
-  const canvas = document.getElementById('game-canvas');
-  const ctx = canvas.getContext('2d');
-
-  const dom = {
-    overlays: {
-      title: document.getElementById('title-screen'),
-      result: document.getElementById('result-screen'),
-    },
-    touchLayer: document.getElementById('touch-layer'),
-    hudLevel: document.getElementById('hud-level'),
-    hudScore: document.getElementById('hud-score'),
-    statusAttack: document.querySelector('#status-attack .value'),
-    statusInvincible: document.querySelector('#status-invincible .value'),
-    statusTrap: document.querySelector('#status-trap .value'),
-    statusField: document.querySelector('#status-field .value'),
-    statusDash: document.querySelector('#status-dash .value'),
-    statusSmoke: document.querySelector('#status-smoke .value'),
-    resultScore: document.getElementById('result-score'),
-    resultLevel: document.getElementById('result-level'),
-    resultTime: document.getElementById('result-time'),
-    initialInput: document.getElementById('initial-input'),
-    resultForm: document.getElementById('result-form'),
-    rankingPanel: document.getElementById('ranking-panel'),
-    rankingList: document.getElementById('ranking-list'),
-    resetRanking: document.getElementById('reset-ranking'),
-    closeRanking: document.getElementById('close-ranking'),
-    settingsPanel: document.getElementById('settings-panel'),
-    closeSettings: document.getElementById('close-settings'),
-    sightRange: document.getElementById('sight-range'),
-    padSize: document.getElementById('pad-size'),
-    swipeSensitivity: document.getElementById('swipe-sensitivity'),
-    vibrationToggle: document.getElementById('vibration-toggle'),
-    screenshakeToggle: document.getElementById('screenshake-toggle'),
-    fogToggle: document.getElementById('fog-toggle'),
-    toggleSound: document.getElementById('toggle-sound'),
-    openSettings: document.getElementById('open-settings'),
-    openRanking: document.getElementById('open-ranking'),
-    startButton: document.getElementById('start-button'),
-    retryButton: document.getElementById('retry-button'),
-    backTitle: document.getElementById('back-title'),
-    pauseButton: document.getElementById('pause-button'),
-    howtoBtn: document.getElementById('show-howto'),
-    howto: document.getElementById('howto'),
-    virtualPad: document.getElementById('virtual-pad'),
-    padButtons: Array.from(document.querySelectorAll('#virtual-pad .pad-btn')),
-    padToggle: document.getElementById('pad-toggle'),
-    dashButton: document.getElementById('dash-button'),
-    smokeButton: document.getElementById('smoke-button'),
-    loading: document.getElementById('loading-indicator'),
-    pauseOverlay: document.getElementById('pause-overlay'),
-    tutorial: document.getElementById('tutorial-pop'),
-    tutorialClose: document.getElementById('tutorial-close'),
-  };
-
-  const Config = (() => {
-    const BASE_TILE = 32;
-    return {
-      VERSION: '1.0.0',
-      CANVAS_MIN_HEIGHT: 520,
-      TILE_BASE: BASE_TILE,
-      TILE_MIN: 18,
-      MAX_FRAME_PATHFIND: 3,
-      VIEW_RADIUS_DEFAULT: Number(dom.sightRange.value),
-      INPUT: {
-        swipeSensitivity: Number(dom.swipeSensitivity.value),
-        padSize: Number(dom.padSize.value),
-      },
-      MAZE: {
-        braidMin: 0.25,
-        braidMax: 0.45,
-        minJunctionRatio: 0.12,
-        roomCount: 2,
-        roomSize: { min: 3, max: 5 },
-        widenThreshold: 10,
-        widenChance: 0.4,
-        alternativeMaxTries: 40,
-      },
-      AUDIO: {
-        masterVolume: 0.4,
-      },
-      LEVEL: {
-        baseSize: { w: 15, h: 15 },
-        sizeStep: 2,
-        baseEnemies: 2,
-        maxEnemies: 12,
-        baseEnemySpeed: 1.2,
-        speedStep: 0.12,
-        baseTraps: 3,
-        baseItems: 2,
-        itemDropDecay: 0.9,
-      },
-      PLAYER: {
-        baseSpeed: 3.6,
-        slowFactor: 0.45,
-        freezeDuration: 0.5,
-        reverseDuration: 4,
-        dashCooldown: 3,
-        dashDuration: 0.35,
-        dashMultiplier: 2,
-        smokeDuration: 2,
-      },
-      ITEM: {
-        attackDuration: 6,
-        invincibleDuration: 5,
-        smokeChance: 0.2,
-      },
-      TRAP: {
-        slowDuration: 3.5,
-        snareDuration: 0.45,
-        reverseDuration: 4,
-        fogDuration: 6,
-        fogRadiusBase: 5,
-        fogRadiusLevelStep: 0.5,
-        noiseDuration: 4,
-        noisePullStrength: 0.65,
-      },
-      ENEMIES: {
-        SPRINT: { id: 'sprinter', label: 'スプリンター', color: '#ff6b6b', outline: 4, speedFactor: 1.3, view: 5, pathTimer: 28 },
-        STRATEGY: { id: 'strategist', label: 'ストラテジスト', color: '#f9c74f', outline: 2, speedFactor: 1.0, view: 9, pathTimer: 20 },
-        WANDER: { id: 'wanderer', label: 'ワンダラー', color: '#4cc9f0', outline: 3, speedFactor: 0.9, view: 6, pathTimer: 45 },
-        PATROL: { id: 'patroller', label: 'パトローラー', color: '#b5179e', outline: 2, speedFactor: 1.05, view: 7, pathTimer: 35 },
-      },
-      ENEMY_BEHAVIOR: {
-        chaseGrace: 2,
-        pathIntervalMin: 0.22,
-        pathIntervalMax: 0.42,
-        leashDistance: 80,
-        closeDistanceSlow: 2,
-        closeSpeedFactor: 0.8,
-        densityZone: 6,
-        densityLimit: 2,
-        densityCooldown: 5,
-      },
-      SCORE: {
-        base: 1000,
-        timePenalty: 15,
-      },
-    };
-  })();
-
-  const Utils = {
-    rngSeed: Date.now() % 2147483647,
-    /**
-     * @param {number} min
-     * @param {number} max
-     * @returns {number}
-     */
-    randRange(min, max) {
-      return Math.random() * (max - min) + min;
-    },
-    /**
-     * @param {number} max
-     * @returns {number}
-     */
-    randInt(max) {
-      return Math.floor(Math.random() * max);
-    },
-    /**
-     * @param {any[]} array
-     */
-    shuffle(array) {
-      for (let i = array.length - 1; i > 0; i -= 1) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [array[i], array[j]] = [array[j], array[i]];
-      }
-      return array;
-    },
-    clamp(v, min, max) {
-      return Math.max(min, Math.min(max, v));
-    },
-    lerp(a, b, t) {
-      return a + (b - a) * t;
-    },
-    now() {
-      return performance.now() / 1000;
-    },
-    formatTime(sec) {
-      return sec.toFixed(1);
-    },
-    easeOutQuad(t) {
-      return t * (2 - t);
-    },
-  };
-
-  const Audio = (() => {
-    let ctxAudio;
-    let masterGain;
-    let muted = false;
-    /**
-     * @param {number} freq
-     * @param {number} duration
-     */
-    function playBeep(freq, duration) {
-      if (muted) return;
-      try {
-        if (!ctxAudio) {
-          ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
-          masterGain = ctxAudio.createGain();
-          masterGain.gain.value = Config.AUDIO.masterVolume;
-          masterGain.connect(ctxAudio.destination);
-        }
-        const osc = ctxAudio.createOscillator();
-        const gain = ctxAudio.createGain();
-        osc.type = 'triangle';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.0001, ctxAudio.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.4, ctxAudio.currentTime + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, ctxAudio.currentTime + duration);
-        osc.connect(gain).connect(masterGain);
-        osc.start();
-        osc.stop(ctxAudio.currentTime + duration + 0.05);
-      } catch (err) {
-        // ignore
-      }
-    }
-
-    return {
-      play(type) {
-        switch (type) {
-          case 'start':
-            playBeep(440, 0.25);
-            break;
-          case 'item':
-            playBeep(660, 0.2);
-            break;
-          case 'trap':
-            playBeep(220, 0.3);
-            break;
-          case 'goal':
-            playBeep(880, 0.4);
-            break;
-          case 'hit':
-            playBeep(120, 0.2);
-            break;
-        }
-      },
-      toggleMute() {
-        muted = !muted;
-        if (ctxAudio && masterGain) {
-          masterGain.gain.value = muted ? 0 : Config.AUDIO.masterVolume;
-        }
-        return muted;
-      },
-      isMuted() {
-        return muted;
-      },
-    };
-  })();
-
-  const ConfigStore = (() => {
-    const data = {
-      viewRadius: Config.VIEW_RADIUS_DEFAULT,
-      padSize: Config.INPUT.padSize,
-      swipeSensitivity: Config.INPUT.swipeSensitivity,
-      vibration: dom.vibrationToggle.checked,
-      screenshake: dom.screenshakeToggle.checked,
-      fog: dom.fogToggle.checked,
-    };
-    return {
-      get(key) {
-        return data[key];
-      },
-      set(key, value) {
-        data[key] = value;
-      },
-    };
-  })();
-
-  const Input = (() => {
-    /** @type {Set<string>} */
-    const keys = new Set();
-    let swipeStart = null;
-    let gamepadDir = null;
-    let swipeDir = null;
-    let swipeSteps = 0;
-    let dashRequested = false;
-    let smokeRequested = false;
-    let padState = 'full';
-    let longPressTimer = null;
-    let dragData = null;
-
-    function updatePadSize() {
-      const size = ConfigStore.get('padSize');
-      dom.padButtons.forEach((btn) => {
-        btn.style.width = `${size}px`;
-        btn.style.height = `${size}px`;
-      });
-    }
-
-    function setPadState(state) {
-      padState = state;
-      dom.virtualPad.dataset.state = state;
-      dom.padToggle.dataset.state = state;
-      const hidden = state === 'hidden';
-      dom.virtualPad.setAttribute('aria-hidden', hidden ? 'true' : 'false');
-    }
-
-    function cyclePadState() {
-      const order = ['full', 'compact', 'hidden'];
-      const idx = order.indexOf(padState);
-      const next = order[(idx + 1) % order.length];
-      setPadState(next);
-    }
-
-    function handlePadPress(dir) {
-      gamepadDir = dir;
-    }
-
-    function clearPadPress() {
-      gamepadDir = null;
-    }
-
-    dom.padButtons.forEach((btn) => {
-      btn.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        handlePadPress(btn.dataset.dir);
-      });
-      btn.addEventListener('pointerup', clearPadPress);
-      btn.addEventListener('pointercancel', clearPadPress);
-      btn.addEventListener('pointerleave', clearPadPress);
-      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-    });
-
-    function requestDash() {
-      dashRequested = true;
-    }
-
-    function requestSmoke() {
-      smokeRequested = true;
-    }
-
-    dom.dashButton.addEventListener('click', (e) => {
-      e.preventDefault();
-      requestDash();
-    });
-    dom.smokeButton.addEventListener('click', (e) => {
-      e.preventDefault();
-      requestSmoke();
-    });
-
-    window.addEventListener('keydown', (e) => {
-      const key = e.key.toLowerCase();
-      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(key)) {
-        e.preventDefault();
-      }
-      if (key === ' ') {
-        e.preventDefault();
-        requestDash();
-      } else if (key === 'e') {
-        requestSmoke();
-      }
-      keys.add(key);
-    });
-    window.addEventListener('keyup', (e) => {
-      keys.delete(e.key.toLowerCase());
-    });
-
-    function triggerSwipe(dir) {
-      swipeDir = dir;
-      swipeSteps = 1;
-    }
-
-    dom.touchLayer.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
-      swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId };
-      dom.touchLayer.setPointerCapture(e.pointerId);
-    });
-    dom.touchLayer.addEventListener('pointerup', (e) => {
-      if (!swipeStart || swipeStart.id !== e.pointerId) return;
-      const dx = e.clientX - swipeStart.x;
-      const dy = e.clientY - swipeStart.y;
-      const sens = ConfigStore.get('swipeSensitivity');
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > sens) {
-        triggerSwipe(dx > 0 ? 'right' : 'left');
-      } else if (Math.abs(dy) > sens) {
-        triggerSwipe(dy > 0 ? 'down' : 'up');
-      }
-      dom.touchLayer.releasePointerCapture(e.pointerId);
-      swipeStart = null;
-    });
-    dom.touchLayer.addEventListener('pointercancel', (e) => {
-      if (swipeStart && swipeStart.id === e.pointerId) {
-        dom.touchLayer.releasePointerCapture(e.pointerId);
-      }
-      swipeStart = null;
-    });
-
-    dom.padToggle.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      dom.padToggle.setPointerCapture(e.pointerId);
-      longPressTimer = window.setTimeout(() => {
-        const rect = dom.padToggle.getBoundingClientRect();
-        dragData = {
-          id: e.pointerId,
-          startX: e.clientX,
-          startY: e.clientY,
-          left: rect.left,
-          top: rect.top,
-        };
-        dom.padToggle.classList.add('dragging');
-      }, 300);
-    });
-
-    function endDrag(pointerId, asClick) {
-      if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-      }
-      if (dragData && dragData.id === pointerId) {
-        dragData = null;
-        dom.padToggle.classList.remove('dragging');
-      } else if (asClick) {
-        cyclePadState();
-      }
-    }
-
-    dom.padToggle.addEventListener('pointermove', (e) => {
-      if (!dragData || dragData.id !== e.pointerId) return;
-      const dx = e.clientX - dragData.startX;
-      const dy = e.clientY - dragData.startY;
-      const maxLeft = window.innerWidth - dom.padToggle.offsetWidth - 8;
-      const maxTop = window.innerHeight - dom.padToggle.offsetHeight - 8;
-      const newLeft = Math.max(8, Math.min(maxLeft, dragData.left + dx));
-      const newTop = Math.max(8, Math.min(maxTop, dragData.top + dy));
-      dom.padToggle.style.left = `${newLeft}px`;
-      dom.padToggle.style.top = `${newTop}px`;
-      dom.padToggle.style.right = 'auto';
-      dom.padToggle.style.bottom = 'auto';
-    });
-
-    dom.padToggle.addEventListener('pointerup', (e) => {
-      dom.padToggle.releasePointerCapture(e.pointerId);
-      const wasDragging = Boolean(dragData && dragData.id === e.pointerId);
-      endDrag(e.pointerId, !wasDragging);
-    });
-    dom.padToggle.addEventListener('pointercancel', (e) => {
-      dom.padToggle.releasePointerCapture(e.pointerId);
-      endDrag(e.pointerId, false);
-    });
-
-    function resolveDirection(dir) {
-      switch (dir) {
-        case 'up':
-          return { x: 0, y: -1 };
-        case 'down':
-          return { x: 0, y: 1 };
-        case 'left':
-          return { x: -1, y: 0 };
-        case 'right':
-          return { x: 1, y: 0 };
-        default:
-          return { x: 0, y: 0 };
-      }
-    }
-
-    function getDirection(reverse) {
-      let horizontal = 0;
-      let vertical = 0;
-      if (keys.has('arrowup') || keys.has('w')) vertical -= 1;
-      if (keys.has('arrowdown') || keys.has('s')) vertical += 1;
-      if (keys.has('arrowleft') || keys.has('a')) horizontal -= 1;
-      if (keys.has('arrowright') || keys.has('d')) horizontal += 1;
-      if (gamepadDir) {
-        const { x, y } = resolveDirection(gamepadDir);
-        horizontal += x;
-        vertical += y;
-      }
-      if (swipeSteps > 0 && swipeDir) {
-        const { x, y } = resolveDirection(swipeDir);
-        horizontal += x;
-        vertical += y;
-      }
-      horizontal = Math.max(-1, Math.min(1, horizontal));
-      vertical = Math.max(-1, Math.min(1, vertical));
-      if (reverse) {
-        horizontal *= -1;
-        vertical *= -1;
-      }
-      return { x: horizontal, y: vertical };
-    }
-
-    function notifyStep() {
-      if (swipeSteps > 0) {
-        swipeSteps -= 1;
-        if (swipeSteps <= 0) {
-          swipeDir = null;
-        }
-      }
-    }
-
-    function consumeDash() {
-      const result = dashRequested;
-      dashRequested = false;
-      return result;
-    }
-
-    function consumeSmoke() {
-      const result = smokeRequested;
-      smokeRequested = false;
-      return result;
-    }
-
-    updatePadSize();
-    setPadState('full');
-
-    return {
-      getDirection,
-      updatePadSize,
-      setPadLabels(reverse) {
-        dom.padButtons.forEach((btn) => {
-          const dir = btn.dataset.dir;
-          if (!reverse) {
-            btn.textContent = dir === 'up' ? '▲' : dir === 'down' ? '▼' : dir === 'left' ? '◀' : '▶';
-          } else {
-            const mapping = { up: '▼', down: '▲', left: '▶', right: '◀' };
-            btn.textContent = mapping[dir];
-          }
-        });
-      },
-      notifyStep,
-      consumeDash,
-      consumeSmoke,
-      setPadState,
-      getPadState: () => padState,
-    };
-  })();
-
-  const Maze = (() => {
-    const DIRS = [
-      { x: 1, y: 0 },
-      { x: -1, y: 0 },
-      { x: 0, y: 1 },
-      { x: 0, y: -1 },
-    ];
-
-    let lastMetadata = { rooms: [], widened: [], junctions: [] };
-
-    function baseGenerate(width, height) {
-      const w = width % 2 === 0 ? width + 1 : width;
-      const h = height % 2 === 0 ? height + 1 : height;
-      const maze = Array.from({ length: h }, () => Array(w).fill(1));
-      const stack = [];
-      const startX = 1;
-      const startY = 1;
-      maze[startY][startX] = 0;
-      stack.push({ x: startX, y: startY });
-      const stepDirs = DIRS.map((d) => ({ x: d.x * 2, y: d.y * 2 }));
-
-      while (stack.length) {
-        const current = stack[stack.length - 1];
-        const candidates = stepDirs
-          .map((d) => ({ x: current.x + d.x, y: current.y + d.y, midX: current.x + d.x / 2, midY: current.y + d.y / 2 }))
-          .filter(
-            (cell) =>
-              cell.x > 0 &&
-              cell.y > 0 &&
-              cell.x < w - 1 &&
-              cell.y < h - 1 &&
-              maze[cell.y][cell.x] === 1
-          );
-        if (!candidates.length) {
-          stack.pop();
-          continue;
-        }
-        const next = candidates[Utils.randInt(candidates.length)];
-        maze[next.midY][next.midX] = 0;
-        maze[next.y][next.x] = 0;
-        stack.push({ x: next.x, y: next.y });
-      }
-      maze[h - 2][w - 2] = 0;
-      return maze;
-    }
-
-    function inBounds(grid, x, y) {
-      return y >= 0 && y < grid.length && x >= 0 && x < grid[0].length;
-    }
-
-    function countOpenNeighbors(grid, x, y) {
-      return DIRS.reduce((acc, d) => (grid[y + d.y] && grid[y + d.y][x + d.x] === 0 ? acc + 1 : acc), 0);
-    }
-
-    function getOpenNeighbors(grid, x, y) {
-      return DIRS.filter((d) => inBounds(grid, x + d.x, y + d.y) && grid[y + d.y][x + d.x] === 0).map((d) => ({
-        x: x + d.x,
-        y: y + d.y,
-      }));
-    }
-
-    function carveRoom(grid, x, y, width, height, rooms) {
-      const tiles = [];
-      for (let ry = y; ry < y + height; ry += 1) {
-        for (let rx = x; rx < x + width; rx += 1) {
-          if (ry <= 0 || ry >= grid.length - 1 || rx <= 0 || rx >= grid[0].length - 1) continue;
-          grid[ry][rx] = 0;
-          tiles.push({ x: rx, y: ry });
-        }
-      }
-      if (!tiles.length) return null;
-      const center = tiles[Math.floor(tiles.length / 2)];
-      const room = { tiles, center };
-      rooms.push(room);
-      return room;
-    }
-
-    function connectRoom(grid, room) {
-      if (!room) return;
-      const perimeter = [];
-      room.tiles.forEach((tile) => {
-        DIRS.forEach((d) => {
-          const nx = tile.x + d.x;
-          const ny = tile.y + d.y;
-          if (!inBounds(grid, nx, ny)) return;
-          if (grid[ny][nx] === 1) {
-            perimeter.push({ x: tile.x, y: tile.y, dir: d });
-          }
-        });
-      });
-      Utils.shuffle(perimeter);
-      const doors = Math.max(2, Math.min(4, Math.floor(perimeter.length / 6) + 1));
-      let created = 0;
-      for (const cell of perimeter) {
-        if (created >= doors) break;
-        let cx = cell.x;
-        let cy = cell.y;
-        let depth = 0;
-        while (depth < 6) {
-          cx += cell.dir.x;
-          cy += cell.dir.y;
-          if (!inBounds(grid, cx, cy)) break;
-          if (grid[cy][cx] === 0) {
-            created += 1;
-            break;
-          }
-          grid[cy][cx] = 0;
-          depth += 1;
-        }
-      }
-    }
-
-    function addRooms(grid, start, goal, rooms) {
-      const attempts = Math.max(Config.MAZE.roomCount, 2) * 3;
-      let created = 0;
-      for (let i = 0; i < attempts && created < Config.MAZE.roomCount; i += 1) {
-        const rw = Utils.randInt(Config.MAZE.roomSize.max - Config.MAZE.roomSize.min + 1) + Config.MAZE.roomSize.min;
-        const rh = Utils.randInt(Config.MAZE.roomSize.max - Config.MAZE.roomSize.min + 1) + Config.MAZE.roomSize.min;
-        const rx = Utils.randInt(grid[0].length - rw - 2) + 1;
-        const ry = Utils.randInt(grid.length - rh - 2) + 1;
-        if (
-          (rx <= start.x && start.x <= rx + rw && ry <= start.y && start.y <= ry + rh) ||
-          (rx <= goal.x && goal.x <= rx + rw && ry <= goal.y && goal.y <= ry + rh)
-        ) {
-          continue;
-        }
-        let blocked = false;
-        for (let y = ry - 1; y < ry + rh + 1 && !blocked; y += 1) {
-          for (let x = rx - 1; x < rx + rw + 1; x += 1) {
-            if (!inBounds(grid, x, y)) {
-              blocked = true;
-              break;
-            }
-            if (grid[y][x] === 0) {
-              blocked = true;
-              break;
-            }
-          }
-        }
-        if (blocked) continue;
-        const room = carveRoom(grid, rx, ry, rw, rh, rooms);
-        if (room) {
-          connectRoom(grid, room);
-          created += 1;
-        }
-      }
-    }
-
-    function getDeadEnds(grid) {
-      const ends = [];
-      for (let y = 1; y < grid.length - 1; y += 1) {
-        for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] === 0 && countOpenNeighbors(grid, x, y) === 1) {
-            ends.push({ x, y });
-          }
-        }
-      }
-      return ends;
-    }
-
-    function braid(grid) {
-      const deadEnds = getDeadEnds(grid);
-      if (!deadEnds.length) return;
-      const ratio = Utils.randRange(Config.MAZE.braidMin, Config.MAZE.braidMax);
-      const target = Math.floor(deadEnds.length * ratio);
-      Utils.shuffle(deadEnds);
-      for (let i = 0; i < target; i += 1) {
-        const cell = deadEnds[i];
-        const candidates = DIRS.filter((d) => {
-          const wallX = cell.x + d.x;
-          const wallY = cell.y + d.y;
-          const beyondX = cell.x + d.x * 2;
-          const beyondY = cell.y + d.y * 2;
-          return (
-            inBounds(grid, wallX, wallY) &&
-            inBounds(grid, beyondX, beyondY) &&
-            grid[wallY][wallX] === 1 &&
-            grid[beyondY][beyondX] === 0
-          );
-        });
-        if (!candidates.length) continue;
-        const pick = candidates[Utils.randInt(candidates.length)];
-        grid[cell.y + pick.y][cell.x + pick.x] = 0;
-      }
-    }
-
-    function ensureJunctionDensity(grid) {
-      const flat = [];
-      for (let y = 1; y < grid.length - 1; y += 1) {
-        for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] === 0) flat.push({ x, y });
-        }
-      }
-      const targetRatio = Config.MAZE.minJunctionRatio;
-      let junctions = flat.filter((cell) => countOpenNeighbors(grid, cell.x, cell.y) >= 3).length;
-      let attempts = 0;
-      while (flat.length && junctions / flat.length < targetRatio && attempts < flat.length * 4) {
-        attempts += 1;
-        const cell = flat[Utils.randInt(flat.length)];
-        const dirs = DIRS.filter((d) => {
-          const wallX = cell.x + d.x;
-          const wallY = cell.y + d.y;
-          const beyondX = cell.x + d.x * 2;
-          const beyondY = cell.y + d.y * 2;
-          return (
-            inBounds(grid, wallX, wallY) &&
-            inBounds(grid, beyondX, beyondY) &&
-            grid[wallY][wallX] === 1 &&
-            grid[beyondY][beyondX] === 0
-          );
-        });
-        if (!dirs.length) continue;
-        const pick = dirs[Utils.randInt(dirs.length)];
-        grid[cell.y + pick.y][cell.x + pick.x] = 0;
-        junctions = flat.filter((c) => countOpenNeighbors(grid, c.x, c.y) >= 3).length;
-      }
-    }
-
-    function widenCorridors(grid, widened) {
-      const visited = new Set();
-      const key = (x, y) => `${x},${y}`;
-      for (let y = 1; y < grid.length - 1; y += 1) {
-        for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] !== 0) continue;
-          if (visited.has(key(x, y))) continue;
-          const neighbors = getOpenNeighbors(grid, x, y);
-          if (neighbors.length !== 2) continue;
-          const dirA = { x: neighbors[0].x - x, y: neighbors[0].y - y };
-          const dirB = { x: neighbors[1].x - x, y: neighbors[1].y - y };
-          if (!(dirA.x === -dirB.x && dirA.y === -dirB.y)) continue;
-          const dir = { x: Math.sign(dirA.x), y: Math.sign(dirA.y) };
-          const segment = [];
-          const explore = (sx, sy, dx, dy) => {
-            let cx = sx;
-            let cy = sy;
-            while (true) {
-              const cellKey = key(cx, cy);
-              if (!visited.has(cellKey)) {
-                visited.add(cellKey);
-                segment.push({ x: cx, y: cy });
-              }
-              const nextX = cx + dx;
-              const nextY = cy + dy;
-              if (!inBounds(grid, nextX, nextY)) break;
-              if (grid[nextY][nextX] !== 0) break;
-              const nextNeighbors = getOpenNeighbors(grid, nextX, nextY);
-              if (nextNeighbors.length !== 2) {
-                cx = nextX;
-                cy = nextY;
-                visited.add(key(cx, cy));
-                segment.push({ x: cx, y: cy });
-                break;
-              }
-              cx = nextX;
-              cy = nextY;
-              if (visited.has(key(cx, cy))) break;
-            }
-          };
-          explore(x, y, dir.x, dir.y);
-          explore(x, y, -dir.x, -dir.y);
-          const unique = Array.from(new Map(segment.map((c) => [key(c.x, c.y), c])).values());
-          if (unique.length < Config.MAZE.widenThreshold) continue;
-          if (Math.random() > Config.MAZE.widenChance) continue;
-          const perpendicular = dir.x !== 0 ? [{ x: 0, y: 1 }, { x: 0, y: -1 }] : [{ x: 1, y: 0 }, { x: -1, y: 0 }];
-          const widenDir = perpendicular[Utils.randInt(perpendicular.length)];
-          unique.forEach((cell) => {
-            const nx = cell.x + widenDir.x;
-            const ny = cell.y + widenDir.y;
-            if (!inBounds(grid, nx, ny) || grid[ny][nx] === 0) return;
-            grid[ny][nx] = 0;
-            widened.push({ x: nx, y: ny });
-          });
-        }
-      }
-    }
-
-    function shortestPath(grid, start, goal, forbidEdges = null) {
-      const queue = [{ x: start.x, y: start.y, prev: null }];
-      const visited = new Set([`${start.x},${start.y}`]);
-      while (queue.length) {
-        const node = queue.shift();
-        if (node.x === goal.x && node.y === goal.y) {
-          const path = [];
-          let cur = node;
-          while (cur) {
-            path.unshift({ x: cur.x, y: cur.y });
-            cur = cur.prev;
-          }
-          return path;
-        }
-        for (const dir of DIRS) {
-          const nx = node.x + dir.x;
-          const ny = node.y + dir.y;
-          if (!inBounds(grid, nx, ny)) continue;
-          if (grid[ny][nx] !== 0 && !(nx === goal.x && ny === goal.y)) continue;
-          const edgeKey = `${Math.min(node.x, nx)},${Math.min(node.y, ny)}-${Math.max(node.x, nx)},${Math.max(node.y, ny)}`;
-          if (forbidEdges && forbidEdges.has(edgeKey)) continue;
-          const key = `${nx},${ny}`;
-          if (visited.has(key)) continue;
-          visited.add(key);
-          queue.push({ x: nx, y: ny, prev: node });
-        }
-      }
-      return [];
-    }
-
-    function ensureAlternative(grid, start, goal) {
-      const primary = shortestPath(grid, start, goal);
-      if (!primary.length) return;
-      const edges = new Set();
-      for (let i = 0; i < primary.length - 1; i += 1) {
-        const a = primary[i];
-        const b = primary[i + 1];
-        const key = `${Math.min(a.x, b.x)},${Math.min(a.y, b.y)}-${Math.max(a.x, b.x)},${Math.max(a.y, b.y)}`;
-        edges.add(key);
-      }
-      const pathSet = new Set(primary.map((p) => `${p.x},${p.y}`));
-      const alt = shortestPath(grid, start, goal, edges);
-      if (alt.length) return;
-      const inner = primary.slice(1, -1);
-      let tries = 0;
-      while (tries < Config.MAZE.alternativeMaxTries && !shortestPath(grid, start, goal, edges).length) {
-        tries += 1;
-        if (!inner.length) break;
-        const cell = inner[Utils.randInt(inner.length)];
-        const dirs = Utils.shuffle([...DIRS]);
-        let carved = false;
-        for (const dir of dirs) {
-          const wallX = cell.x + dir.x;
-          const wallY = cell.y + dir.y;
-          const targetX = cell.x + dir.x * 2;
-          const targetY = cell.y + dir.y * 2;
-          if (!inBounds(grid, targetX, targetY)) continue;
-          if (grid[wallY][wallX] === 1 && grid[targetY][targetX] === 0 && !pathSet.has(`${targetX},${targetY}`)) {
-            grid[wallY][wallX] = 0;
-            carved = true;
-            break;
-          }
-        }
-        if (!carved) {
-          const dir = DIRS[Utils.randInt(DIRS.length)];
-          const wallX = cell.x + dir.x;
-          const wallY = cell.y + dir.y;
-          const targetX = cell.x + dir.x * 2;
-          const targetY = cell.y + dir.y * 2;
-          if (inBounds(grid, targetX, targetY) && grid[wallY][wallX] === 1) {
-            grid[wallY][wallX] = 0;
-            grid[targetY][targetX] = 0;
-          }
-        }
-      }
-    }
-
-    function computeMetadata(grid, rooms, widened) {
-      const junctions = [];
-      for (let y = 1; y < grid.length - 1; y += 1) {
-        for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] === 0 && countOpenNeighbors(grid, x, y) >= 3) {
-            junctions.push({ x, y });
-          }
-        }
-      }
-      lastMetadata = {
-        rooms,
-        widened,
-        junctions,
-      };
-    }
-
-    function generate(width, height) {
-      const base = baseGenerate(width, height);
-      const start = { x: 1, y: 1 };
-      const goal = { x: base[0].length - 2, y: base.length - 2 };
-      const rooms = [];
-      const widened = [];
-      addRooms(base, start, goal, rooms);
-      braid(base);
-      ensureJunctionDensity(base);
-      widenCorridors(base, widened);
-      ensureAlternative(base, start, goal);
-      computeMetadata(base, rooms, widened);
-      return { grid: base, metadata: lastMetadata };
-    }
-
-    return {
-      generate,
-      getMetadata() {
-        return lastMetadata;
-      },
-    };
-  })();
-
-  const Pathfinding = (() => {
-    /**
-     * @param {number[][]} grid
-     * @param {Vec2} start
-     * @param {Vec2} end
-     * @returns {Vec2[]}
-     */
-    function bfs(grid, start, end) {
-      const h = grid.length;
-      const w = grid[0].length;
-      const visited = Array.from({ length: h }, () => Array(w).fill(false));
-      const queue = [{ x: start.x, y: start.y, path: [] }];
-      visited[start.y][start.x] = true;
-      const dirs = [
-        { x: 1, y: 0 },
-        { x: -1, y: 0 },
-        { x: 0, y: 1 },
-        { x: 0, y: -1 },
-      ];
-      while (queue.length) {
-        const current = queue.shift();
-        if (current.x === end.x && current.y === end.y) {
-          return current.path;
-        }
-        for (const d of dirs) {
-          const nx = current.x + d.x;
-          const ny = current.y + d.y;
-          if (nx >= 0 && ny >= 0 && nx < w && ny < h && !visited[ny][nx] && grid[ny][nx] === 0) {
-            visited[ny][nx] = true;
-            queue.push({ x: nx, y: ny, path: current.path.concat({ x: nx, y: ny }) });
-          }
-        }
-      }
-      return [];
-    }
-
-    /**
-     * @param {number[][]} grid
-     * @param {Vec2} start
-     * @param {Vec2} end
-     * @returns {Vec2[]}
-     */
-    function aStar(grid, start, end) {
-      const h = grid.length;
-      const w = grid[0].length;
-      const open = [{ x: start.x, y: start.y }];
-      const cameFrom = new Map();
-      const gScore = Array.from({ length: h }, () => Array(w).fill(Infinity));
-      const fScore = Array.from({ length: h }, () => Array(w).fill(Infinity));
-      gScore[start.y][start.x] = 0;
-      const heuristic = (x, y) => Math.abs(x - end.x) + Math.abs(y - end.y);
-      fScore[start.y][start.x] = heuristic(start.x, start.y);
-      const dirs = [
-        { x: 1, y: 0 },
-        { x: -1, y: 0 },
-        { x: 0, y: 1 },
-        { x: 0, y: -1 },
-      ];
-
-      while (open.length) {
-        open.sort((a, b) => fScore[a.y][a.x] - fScore[b.y][b.x]);
-        const current = open.shift();
-        if (!current) break;
-        if (current.x === end.x && current.y === end.y) {
-          const path = [];
-          let key = `${current.x},${current.y}`;
-          while (cameFrom.has(key)) {
-            const node = key.split(',');
-            path.unshift({ x: Number(node[0]), y: Number(node[1]) });
-            const prev = cameFrom.get(key);
-            if (!prev) break;
-            key = `${prev.x},${prev.y}`;
-          }
-          return path;
-        }
-
-        for (const d of dirs) {
-          const nx = current.x + d.x;
-          const ny = current.y + d.y;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          if (grid[ny][nx] !== 0 && !(nx === end.x && ny === end.y)) continue;
-          const tentative = gScore[current.y][current.x] + 1;
-          if (tentative < gScore[ny][nx]) {
-            cameFrom.set(`${nx},${ny}`, { x: current.x, y: current.y });
-            gScore[ny][nx] = tentative;
-            fScore[ny][nx] = tentative + heuristic(nx, ny);
-            if (!open.some((node) => node.x === nx && node.y === ny)) {
-              open.push({ x: nx, y: ny });
-            }
-          }
-        }
-      }
-      return [];
-    }
-
-    return {
-      bfs,
-      aStar,
-    };
-  })();
-
-  const FogOfWar = (() => {
-    /**
-     * @param {number[][]} grid
-     * @param {Vec2} pos
-     * @param {number} radius
-     * @returns {boolean[][]}
-     */
-    function compute(grid, pos, radius) {
-      const h = grid.length;
-      const w = grid[0].length;
-      const visible = Array.from({ length: h }, () => Array(w).fill(false));
-      const queue = [{ x: pos.x, y: pos.y, dist: 0 }];
-      visible[pos.y][pos.x] = true;
-      const dirs = [
-        { x: 1, y: 0 },
-        { x: -1, y: 0 },
-        { x: 0, y: 1 },
-        { x: 0, y: -1 },
-      ];
-      while (queue.length) {
-        const current = queue.shift();
-        for (const d of dirs) {
-          const nx = current.x + d.x;
-          const ny = current.y + d.y;
-          const nd = current.dist + 1;
-          if (nx >= 0 && ny >= 0 && nx < w && ny < h && nd <= radius && !visible[ny][nx]) {
-            if (grid[ny][nx] === 0) {
-              visible[ny][nx] = true;
-              queue.push({ x: nx, y: ny, dist: nd });
-            } else {
-              visible[ny][nx] = true;
-            }
-          }
-        }
-      }
-      return visible;
-    }
-
-    return {
-      compute,
-    };
-  })();
-
-  const Renderer = (() => {
-    let tileSize = Config.TILE_BASE;
-    let screenShake = 0;
-    const particles = [];
-    let displayWidth = 0;
-    let displayHeight = 0;
-
-    function resize(width, height) {
-      displayWidth = Math.max(1, Math.floor(width));
-      displayHeight = Math.max(1, Math.floor(height));
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(displayWidth * dpr);
-      canvas.height = Math.floor(displayHeight * dpr);
-      canvas.style.width = `${displayWidth}px`;
-      canvas.style.height = `${displayHeight}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-
-    function updateTileSize(grid) {
-      tileSize = Math.max(
-        4,
-        Math.floor(Math.min(displayWidth / grid[0].length, displayHeight / grid.length))
-      );
-    }
-
-    function addParticle(tileX, tileY, color) {
-      particles.push({ tileX, tileY, life: 0.4, color });
-    }
-
-    function updateParticles(delta) {
-      for (let i = particles.length - 1; i >= 0; i -= 1) {
-        const p = particles[i];
-        p.life -= delta;
-        if (p.life <= 0) {
-          particles.splice(i, 1);
-        }
-      }
-    }
-
-    function drawParticles() {
-      particles.forEach((p) => {
-        const px = p.tileX * tileSize + tileSize / 2;
-        const py = p.tileY * tileSize + tileSize / 2 - (1 - p.life / 0.4) * tileSize * 0.3;
-        ctx.globalAlpha = Math.max(p.life / 0.4, 0);
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(px, py, tileSize * 0.3 * (p.life / 0.4), 0, Math.PI * 2);
-        ctx.fill();
-      });
-      ctx.globalAlpha = 1;
-    }
-
-    function draw(game) {
-      const grid = game.grid;
-      updateTileSize(grid);
-      const shakeX = ConfigStore.get('screenshake') ? Math.sin(performance.now() / 50) * screenShake : 0;
-      const shakeY = ConfigStore.get('screenshake') ? Math.cos(performance.now() / 60) * screenShake : 0;
-      ctx.save();
-      ctx.translate(shakeX, shakeY);
-      ctx.fillStyle = '#050a10';
-      ctx.fillRect(0, 0, displayWidth, displayHeight);
-
-      for (let y = 0; y < grid.length; y += 1) {
-        for (let x = 0; x < grid[0].length; x += 1) {
-          const tile = grid[y][x];
-          const px = x * tileSize;
-          const py = y * tileSize;
-          if (tile === 1) {
-            ctx.fillStyle = '#142031';
-            ctx.fillRect(px, py, tileSize, tileSize);
-          } else {
-            ctx.fillStyle = '#1b2d44';
-            ctx.fillRect(px, py, tileSize, tileSize);
-          }
-        }
-      }
-
-      const fogVisible = (game.fogActive && ConfigStore.get('fog')) || game.debug.fogForce;
-
-      // optional grid
-      if (game.debug.grid) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-        ctx.lineWidth = 1;
-        for (let x = 0; x <= grid[0].length; x += 1) {
-          const px = x * tileSize;
-          ctx.beginPath();
-          ctx.moveTo(px, 0);
-          ctx.lineTo(px, grid.length * tileSize);
-          ctx.stroke();
-        }
-        for (let y = 0; y <= grid.length; y += 1) {
-          const py = y * tileSize;
-          ctx.beginPath();
-          ctx.moveTo(0, py);
-          ctx.lineTo(grid[0].length * tileSize, py);
-          ctx.stroke();
-        }
-      }
-
-      // draw traps
-      const trapColors = {
-        slow: '#00f5d4',
-        snare: '#ffbe0b',
-        reverse: '#f94144',
-        fog: '#adb5ff',
-        noise: '#ff9e00',
-      };
-      const trapLabels = {
-        slow: '減',
-        snare: '拘',
-        reverse: '逆',
-        fog: '霧',
-        noise: '音',
-      };
-      game.traps.forEach((trap) => {
-        if (fogVisible && !game.visible[trap.y][trap.x]) return;
-        const px = trap.x * tileSize + tileSize / 2;
-        const py = trap.y * tileSize + tileSize / 2;
-        ctx.save();
-        ctx.strokeStyle = trapColors[trap.type] || '#f94144';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        const pulse = 1 + Math.sin(performance.now() / 180 + trap.x + trap.y) * 0.2;
-        ctx.arc(px, py, tileSize * 0.32 * pulse, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.font = `${tileSize * 0.42}px "M PLUS 1p"`;
-        ctx.fillStyle = trapColors[trap.type] || '#fff';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(trapLabels[trap.type] || '罠', px, py);
-        ctx.restore();
-      });
-
-      // draw items
-      game.items.forEach((item) => {
-        if (fogVisible && !game.visible[item.y][item.x]) return;
-        const px = item.x * tileSize + tileSize / 2;
-        const py = item.y * tileSize + tileSize / 2;
-        const colorMap = { attack: '#9ef01a', invincible: '#ffd60a', smoke: '#adb5ff' };
-        const labelMap = { attack: '剣', invincible: '盾', smoke: '煙' };
-        ctx.fillStyle = colorMap[item.type] || '#ffd60a';
-        ctx.font = `${tileSize * 0.6}px "M PLUS 1p"`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(labelMap[item.type] || '？', px, py);
-      });
-
-      // draw goal
-      const goal = game.goal;
-      ctx.strokeStyle = '#74c69d';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(goal.x * tileSize + 4, goal.y * tileSize + 4, tileSize - 8, tileSize - 8);
-      ctx.font = `${tileSize * 0.5}px sans-serif`;
-      ctx.fillStyle = '#74c69d';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('ゴ', goal.x * tileSize + tileSize / 2, goal.y * tileSize + tileSize / 2);
-
-      // draw enemies
-      game.enemies.forEach((enemy) => {
-        if (fogVisible && !game.visible[enemy.tileY][enemy.tileX]) return;
-        const ex = enemy.x * tileSize;
-        const ey = enemy.y * tileSize;
-        ctx.save();
-        ctx.translate(ex, ey);
-        ctx.fillStyle = enemy.color;
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = enemy.outline;
-        ctx.font = `${tileSize * 0.9}px "M PLUS 1p"`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.strokeText('敵', 0, 0);
-        ctx.fillText('敵', 0, 0);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        switch (enemy.type) {
-          case 'SPRINT':
-            ctx.moveTo(0, -tileSize * 0.6);
-            ctx.lineTo(tileSize * 0.4, tileSize * 0.6);
-            ctx.lineTo(-tileSize * 0.4, tileSize * 0.6);
-            ctx.closePath();
-            break;
-          case 'STRATEGY':
-            ctx.rect(-tileSize * 0.5, -tileSize * 0.5, tileSize, tileSize);
-            break;
-          case 'WANDER':
-            ctx.arc(0, 0, tileSize * 0.55, 0, Math.PI * 2);
-            break;
-          case 'PATROL':
-            ctx.moveTo(-tileSize * 0.5, -tileSize * 0.2);
-            ctx.lineTo(tileSize * 0.5, -tileSize * 0.2);
-            ctx.lineTo(tileSize * 0.2, tileSize * 0.6);
-            ctx.lineTo(-tileSize * 0.2, tileSize * 0.6);
-            ctx.closePath();
-            break;
-        }
-        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-        ctx.stroke();
-        ctx.restore();
-      });
-
-      // draw player
-      const pxPlayer = game.player.x * tileSize;
-      const pyPlayer = game.player.y * tileSize;
-      ctx.fillStyle = '#fffb8f';
-      ctx.font = `${tileSize}px "M PLUS 1p"`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 6;
-      ctx.strokeText('私', pxPlayer, pyPlayer);
-      ctx.fillText('私', pxPlayer, pyPlayer);
-
-      if (fogVisible) {
-        ctx.fillStyle = 'rgba(5,8,12,0.8)';
-        ctx.beginPath();
-        ctx.rect(0, 0, displayWidth, displayHeight);
-        ctx.fill();
-        ctx.globalCompositeOperation = 'destination-out';
-        for (let y = 0; y < game.visible.length; y += 1) {
-          for (let x = 0; x < game.visible[0].length; x += 1) {
-            if (!game.visible[y][x]) continue;
-            ctx.beginPath();
-            ctx.rect(x * tileSize, y * tileSize, tileSize, tileSize);
-            ctx.fill();
-          }
-        }
-        ctx.globalCompositeOperation = 'source-over';
-      }
-
-      if (game.noise && game.noise.timer > 0) {
-        const radius = tileSize * (1.2 + Math.sin(performance.now() / 120) * 0.3);
-        ctx.strokeStyle = 'rgba(255, 158, 0, 0.6)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc((game.noise.x + 0.5) * tileSize, (game.noise.y + 0.5) * tileSize, radius, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      drawParticles();
-
-      ctx.restore();
-      screenShake = Math.max(0, screenShake - 0.5);
-    }
-
-    return {
-      resize,
-      draw,
-      addParticle,
-      setShake(power) {
-        screenShake = Math.max(screenShake, power);
-      },
-      updateParticles,
-      getTileSize() {
-        return tileSize;
-      },
-    };
-  })();
-
-  const Items = (() => {
-    const items = [];
-
-    function spawn(grid, count, start, goal, level, metadata) {
-      items.length = 0;
-      const h = grid.length;
-      const w = grid[0].length;
-      const candidates = [];
-      for (let y = 1; y < h - 1; y += 1) {
-        for (let x = 1; x < w - 1; x += 1) {
-          if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
-            candidates.push({ x, y });
-          }
-        }
-      }
-      if (!candidates.length) return;
-      Utils.shuffle(candidates);
-      const minItems = Math.max(1, Math.floor(level / 2));
-      const total = Math.min(candidates.length, Math.max(count, minItems));
-      const typesQueue = [];
-      typesQueue.push('attack');
-      if (total > 1) typesQueue.push('invincible');
-      while (typesQueue.length < total) {
-        if (Math.random() < Config.ITEM.smokeChance) {
-          typesQueue.push('smoke');
-        } else {
-          typesQueue.push(Math.random() < 0.5 ? 'attack' : 'invincible');
-        }
-      }
-
-      const startRange = candidates.filter((cell) => {
-        const d = Math.abs(cell.x - start.x) + Math.abs(cell.y - start.y);
-        return d >= 3 && d <= 8;
-      });
-      if (startRange.length) {
-        const pick = startRange[0];
-        items.push({ ...pick, type: 'attack' });
-        const key = `${pick.x},${pick.y}`;
-        for (let i = candidates.length - 1; i >= 0; i -= 1) {
-          if (`${candidates[i].x},${candidates[i].y}` === key) {
-            candidates.splice(i, 1);
-            break;
-          }
-        }
-        typesQueue.shift();
-      }
-
-      while (items.length < total && candidates.length) {
-        const cell = candidates.shift();
-        const type = typesQueue.shift() || 'attack';
-        items.push({ ...cell, type });
-      }
-
-      if (metadata && metadata.rooms) {
-        metadata.rooms.forEach((room) => {
-          if (items.length >= total) return;
-          const tiles = room.tiles ? [...room.tiles] : [];
-          Utils.shuffle(tiles);
-          const freeTile = tiles.find((tile) => !items.some((item) => item.x === tile.x && item.y === tile.y));
-          if (freeTile) {
-            items.push({ ...freeTile, type: 'invincible' });
-          }
-        });
-      }
-      items.splice(total);
-    }
-
-    function take(x, y) {
-      const idx = items.findIndex((item) => item.x === x && item.y === y);
-      if (idx >= 0) {
-        return items.splice(idx, 1)[0];
-      }
-      return null;
-    }
-
-    return {
-      items,
-      spawn,
-      take,
-    };
-  })();
-
-  const Traps = (() => {
-    const traps = [];
-    const definitions = [
-      { type: 'slow', minLevel: 1, weight: 3 },
-      { type: 'snare', minLevel: 1, weight: 2 },
-      { type: 'reverse', minLevel: 2, weight: 2 },
-      { type: 'fog', minLevel: 3, weight: 2 },
-      { type: 'noise', minLevel: 5, weight: 1 },
-    ];
-
-    function spawn(grid, count, start, goal, level, blocked = []) {
-      traps.length = 0;
-      const h = grid.length;
-      const w = grid[0].length;
-      const candidates = [];
-      const blockedKey = new Set(blocked.map((b) => `${b.x},${b.y}`));
-      for (let y = 1; y < h - 1; y += 1) {
-        for (let x = 1; x < w - 1; x += 1) {
-          if (grid[y][x] === 0 && !(x === start.x && y === start.y) && !(x === goal.x && y === goal.y)) {
-            if ((x + y) % 3 === 0) continue;
-            if (blockedKey.has(`${x},${y}`)) continue;
-            candidates.push({ x, y });
-          }
-        }
-      }
-      Utils.shuffle(candidates);
-      const pool = [];
-      definitions
-        .filter((def) => level >= def.minLevel)
-        .forEach((def) => {
-          const weight = def.weight + Math.max(0, Math.floor((level - def.minLevel) / 3));
-          for (let i = 0; i < weight; i += 1) {
-            pool.push(def.type);
-          }
-        });
-      for (let i = 0; i < count && i < candidates.length && pool.length; i += 1) {
-        const type = pool[Utils.randInt(pool.length)];
-        traps.push({ ...candidates[i], type });
-      }
-    }
-
-    function find(x, y) {
-      return traps.find((trap) => trap.x === x && trap.y === y);
-    }
-
-    function consume(x, y) {
-      const index = traps.findIndex((trap) => trap.x === x && trap.y === y);
-      if (index >= 0) {
-        return traps.splice(index, 1)[0];
-      }
-      return null;
-    }
-
-    return {
-      traps,
-      spawn,
-      find,
-      consume,
-    };
-  })();
-
-  const Player = (() => {
-    const state = {
-      x: 0,
-      y: 0,
-      tileX: 0,
-      tileY: 0,
-      attackTimer: 0,
-      invincibleTimer: 0,
-      trapTimer: 0,
-      trapType: null,
-      freezeTimer: 0,
-      speed: Config.PLAYER.baseSpeed,
-      dashTimer: 0,
-      dashCooldown: 0,
-      smokeTimer: 0,
-      smokeCharges: 0,
-      lastMoveDir: { x: 0, y: 0 },
-    };
-
-    function reset(pos) {
-      state.tileX = pos.x;
-      state.tileY = pos.y;
-      state.x = pos.x + 0.5;
-      state.y = pos.y + 0.5;
-      state.attackTimer = 0;
-      state.invincibleTimer = 0;
-      state.trapTimer = 0;
-      state.trapType = null;
-      state.freezeTimer = 0;
-      state.speed = Config.PLAYER.baseSpeed;
-      state.dashTimer = 0;
-      state.dashCooldown = 0;
-      state.smokeTimer = 0;
-      state.smokeCharges = 0;
-      state.lastMoveDir = { x: 0, y: 0 };
-    }
-
-    function update(delta, grid) {
-      if (state.freezeTimer > 0) {
-        state.freezeTimer -= delta;
-        return;
-      }
-      const reverse = state.trapType === 'reverse';
-      const dir = Input.getDirection(reverse);
-      const centerX = state.tileX + 0.5;
-      const centerY = state.tileY + 0.5;
-      let moveX = Math.sign(dir.x || 0);
-      let moveY = Math.sign(dir.y || 0);
-      if (moveX !== 0 && Math.abs(state.y - centerY) > 0.35 && moveY !== 0) {
-        moveX = 0;
-      }
-      if (moveX !== 0 && Math.abs(state.y - centerY) > 0.35) {
-        moveX = 0;
-        if (moveY !== 0) {
-          state.y = Utils.lerp(state.y, centerY, 0.45);
-        }
-      }
-      if (moveY !== 0 && Math.abs(state.x - centerX) > 0.35) {
-        moveY = 0;
-        if (moveX !== 0) {
-          state.x = Utils.lerp(state.x, centerX, 0.45);
-        }
-      }
-      if (moveX !== 0 && moveY !== 0) {
-        moveX = Math.abs(dir.x) >= Math.abs(dir.y) ? Math.sign(dir.x) : 0;
-        moveY = moveX === 0 ? Math.sign(dir.y) : 0;
-      }
-      const length = Math.hypot(moveX, moveY) || 1;
-      moveX /= length;
-      moveY /= length;
-      let speed = state.speed;
-      if (state.trapType === 'slow') speed *= Config.PLAYER.slowFactor;
-      if (state.dashTimer > 0) speed *= Config.PLAYER.dashMultiplier;
-      const newX = state.x + moveX * delta * speed;
-      const newY = state.y + moveY * delta * speed;
-
-      const tryMove = (nx, ny) => {
-        const tx = Math.floor(nx);
-        const ty = Math.floor(ny);
-        if (grid[ty] && grid[ty][tx] === 0) {
-          state.x = nx;
-          state.y = ny;
-          if (tx !== state.tileX || ty !== state.tileY) {
-            state.tileX = tx;
-            state.tileY = ty;
-            Input.notifyStep();
-          }
-        }
-      };
-
-      const prevTileX = state.tileX;
-      const prevTileY = state.tileY;
-      tryMove(newX, state.y);
-      tryMove(state.x, newY);
-      if (state.tileX !== prevTileX || state.tileY !== prevTileY) {
-        state.lastMoveDir = { x: moveX, y: moveY };
-      }
-
-      if (state.attackTimer > 0) state.attackTimer -= delta;
-      if (state.invincibleTimer > 0) state.invincibleTimer -= delta;
-      if (state.trapTimer > 0) {
-        if (state.trapType !== 'fog' && state.trapType !== 'noise') {
-          state.trapTimer -= delta;
-        }
-        if (state.trapTimer <= 0.0001) {
-          state.trapTimer = 0;
-          state.trapType = null;
-          Input.setPadLabels(false);
-        }
-      }
-      if (state.dashTimer > 0) {
-        state.dashTimer = Math.max(0, state.dashTimer - delta);
-      }
-      if (state.dashCooldown > 0) {
-        state.dashCooldown = Math.max(0, state.dashCooldown - delta);
-      }
-      if (state.smokeTimer > 0) {
-        state.smokeTimer = Math.max(0, state.smokeTimer - delta);
-      }
-    }
-
-    return {
-      state,
-      reset,
-      update,
-      tryDash() {
-        if (state.dashCooldown > 0 || state.freezeTimer > 0) return false;
-        state.dashTimer = Config.PLAYER.dashDuration;
-        state.dashCooldown = Config.PLAYER.dashCooldown;
-        return true;
-      },
-      addSmokeCharge() {
-        state.smokeCharges += 1;
-      },
-      useSmoke() {
-        if (state.smokeCharges <= 0 || state.smokeTimer > 0) return false;
-        state.smokeCharges -= 1;
-        state.smokeTimer = Config.PLAYER.smokeDuration;
-        return true;
-      },
-    };
-  })();
-
-  const EnemyManager = (() => {
-    const enemies = [];
-    let difficultyLevel = 1;
-    let mazeMeta = { rooms: [], widened: [], junctions: [] };
-    const dirs = [
-      { x: 1, y: 0 },
-      { x: -1, y: 0 },
-      { x: 0, y: 1 },
-      { x: 0, y: -1 },
-    ];
-
-    function countOpenNeighbors(grid, x, y) {
-      return dirs.reduce((sum, d) => (grid[y + d.y] && grid[y + d.y][x + d.x] === 0 ? sum + 1 : sum), 0);
-    }
-
-    function isNarrowCorridor(grid, x, y) {
-      const neighbors = dirs
-        .filter((d) => grid[y + d.y] && grid[y + d.y][x + d.x] === 0)
-        .map((d) => ({ x: d.x, y: d.y }));
-      if (neighbors.length !== 2) return false;
-      const [a, b] = neighbors;
-      return a.x === -b.x && a.y === -b.y;
-    }
-
-    function createPatrolTargets(grid, start) {
-      const targets = [];
-      dirs.forEach((dir) => {
-        let cx = start.x;
-        let cy = start.y;
-        while (grid[cy + dir.y] && grid[cy + dir.y][cx + dir.x] === 0) {
-          cx += dir.x;
-          cy += dir.y;
-        }
-        if (!(cx === start.x && cy === start.y)) {
-          targets.push({ x: cx, y: cy });
-        }
-      });
-      return targets.length ? targets : [{ x: start.x, y: start.y }];
-    }
-
-    function createEnemy(type, start, grid) {
-      const base = Config.ENEMIES[type];
-      const enemy = {
-        type,
-        color: base.color,
-        outline: base.outline,
-        speedFactor: base.speedFactor,
-        view: base.view,
-        pathCooldown: Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax),
-        x: start.x + 0.5,
-        y: start.y + 0.5,
-        tileX: start.x,
-        tileY: start.y,
-        path: [],
-        currentTarget: null,
-        chaseMode: false,
-        patrolTargets: [],
-        patrolIndex: 0,
-        graceTimer: Config.ENEMY_BEHAVIOR.chaseGrace,
-        waitTimer: 0,
-        home: { x: start.x, y: start.y },
-        returning: false,
-        wanderTimer: Utils.randRange(0.3, 1.2),
-      };
-      if (type === 'PATROL') {
-        enemy.patrolTargets = createPatrolTargets(grid, start);
-      }
-      return enemy;
-    }
-
-    function gatherPool(cells = []) {
-      const copy = cells.map((c) => ({ x: c.x, y: c.y }));
-      Utils.shuffle(copy);
-      return copy;
-    }
-
-    function selectSpawn(pool, grid, start, goal, used) {
-      while (pool.length) {
-        const cell = pool.shift();
-        const key = `${cell.x},${cell.y}`;
-        if (used.has(key)) continue;
-        if (grid[cell.y][cell.x] !== 0) continue;
-        if (cell.x === goal.x && cell.y === goal.y) continue;
-        const dist = Math.hypot(cell.x - start.x, cell.y - start.y);
-        if (dist < 6) continue;
-        if (isNarrowCorridor(grid, cell.x, cell.y)) continue;
-        used.add(key);
-        return cell;
-      }
-      return null;
-    }
-
-    function spawn(grid, count, start, goal, level, metadata = { rooms: [], widened: [], junctions: [] }) {
-      difficultyLevel = level;
-      mazeMeta = metadata || { rooms: [], widened: [], junctions: [] };
-      enemies.length = 0;
-      const used = new Set();
-
-      const roomTiles = gatherPool(
-        (mazeMeta.rooms || []).flatMap((room) => room.tiles || [{ x: room.center?.x || start.x, y: room.center?.y || start.y }])
-      );
-      const wideTiles = gatherPool(mazeMeta.widened || []);
-      const junctionTiles = gatherPool(mazeMeta.junctions || []);
-      const generalTiles = [];
-      for (let y = 1; y < grid.length - 1; y += 1) {
-        for (let x = 1; x < grid[0].length - 1; x += 1) {
-          if (grid[y][x] !== 0) continue;
-          generalTiles.push({ x, y });
-        }
-      }
-      Utils.shuffle(generalTiles);
-
-      const placements = [];
-      const roomCell = selectSpawn(roomTiles, grid, start, goal, used);
-      if (roomCell) placements.push(roomCell);
-      if (placements.length < count) {
-        const wideCell = selectSpawn(wideTiles, grid, start, goal, used);
-        if (wideCell) placements.push(wideCell);
-      }
-      while (placements.length < count) {
-        const branchCell = selectSpawn(junctionTiles, grid, start, goal, used);
-        if (!branchCell) break;
-        placements.push(branchCell);
-      }
-      while (placements.length < count) {
-        const cell = selectSpawn(generalTiles, grid, start, goal, used);
-        if (!cell) break;
-        placements.push(cell);
-      }
-
-      const typePool = ['SPRINT', 'WANDER'];
-      if (level >= 2) typePool.push('STRATEGY');
-      if (level >= 3) typePool.push('SPRINT');
-      if (level >= 4) typePool.push('PATROL');
-      if (level >= 6) typePool.push('STRATEGY', 'SPRINT');
-      if (level >= 8) typePool.push('PATROL', 'WANDER');
-
-      placements.slice(0, count).forEach((cell) => {
-        const type = typePool[Utils.randInt(typePool.length)];
-        enemies.push(createEnemy(type, cell, grid));
-      });
-    }
-
-    function planPath(enemy, grid, target, useAStar) {
-      if (!target) return false;
-      const start = { x: enemy.tileX, y: enemy.tileY };
-      const path = useAStar ? Pathfinding.aStar(grid, start, target) : Pathfinding.bfs(grid, start, target);
-      if (path.length) {
-        enemy.path = path;
-        enemy.currentTarget = { ...target };
-        enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
-        return true;
-      }
-      return false;
-    }
-
-    function randomStep(enemy, grid) {
-      const options = dirs
-        .map((dir) => ({ x: enemy.tileX + dir.x, y: enemy.tileY + dir.y }))
-        .filter((pos) => grid[pos.y] && grid[pos.y][pos.x] === 0);
-      if (options.length) {
-        const pick = options[Utils.randInt(options.length)];
-        enemy.path = [{ x: pick.x, y: pick.y }];
-        enemy.currentTarget = { ...pick };
-      }
-    }
-
-    function applyDensityControl() {
-      const zoneMap = new Map();
-      const zoneSize = Config.ENEMY_BEHAVIOR.densityZone;
-      enemies.forEach((enemy) => {
-        const zx = Math.floor(enemy.tileX / zoneSize);
-        const zy = Math.floor(enemy.tileY / zoneSize);
-        const key = `${zx},${zy}`;
-        if (!zoneMap.has(key)) zoneMap.set(key, []);
-        zoneMap.get(key).push(enemy);
-      });
-      zoneMap.forEach((list) => {
-        if (list.length > Config.ENEMY_BEHAVIOR.densityLimit) {
-          list
-            .slice(Config.ENEMY_BEHAVIOR.densityLimit)
-            .forEach((enemy) => {
-              enemy.waitTimer = Math.max(enemy.waitTimer, Config.ENEMY_BEHAVIOR.densityCooldown);
-              enemy.path = [];
-            });
-        }
-      });
-    }
-
-    function update(delta, grid, player, options = {}) {
-      const playerTile = { x: player.tileX, y: player.tileY };
-      const noise = options.noise || { timer: 0 };
-      const smokeActive = player.smokeTimer > 0;
-      const baseSpeed = Config.LEVEL.baseEnemySpeed + (difficultyLevel - 1) * Config.LEVEL.speedStep;
-
-      applyDensityControl();
-
-      let pathBudget = Config.MAX_FRAME_PATHFIND;
-      enemies.forEach((enemy) => {
-        if (enemy.dead) return;
-        enemy.graceTimer = Math.max(0, enemy.graceTimer - delta);
-        if (enemy.waitTimer > 0) {
-          enemy.waitTimer = Math.max(0, enemy.waitTimer - delta);
-        }
-        enemy.pathCooldown -= delta;
-        enemy.wanderTimer -= delta;
-
-        const noiseActive = noise.timer > 0;
-        const distance = Math.abs(enemy.tileX - playerTile.x) + Math.abs(enemy.tileY - playerTile.y);
-        let desiredTarget = null;
-        let useAStar = false;
-        let vision = enemy.view;
-        if (smokeActive) {
-          vision = Math.max(2, Math.floor(vision * 0.5));
-        }
-
-        if (enemy.waitTimer <= 0) {
-          if (noiseActive) {
-            desiredTarget = { x: noise.x, y: noise.y };
-          } else if (enemy.graceTimer <= 0) {
-            switch (enemy.type) {
-              case 'STRATEGY': {
-                if (distance <= vision * 1.2) {
-                  const predicted = { x: playerTile.x, y: playerTile.y };
-                  if (player.lastMoveDir) {
-                    predicted.x += Math.sign(player.lastMoveDir.x) * Math.min(2, Math.abs(player.lastMoveDir.x) > 0 ? 2 : 0);
-                    predicted.y += Math.sign(player.lastMoveDir.y) * Math.min(2, Math.abs(player.lastMoveDir.y) > 0 ? 2 : 0);
-                    if (grid[predicted.y] && grid[predicted.y][predicted.x] === 0) {
-                      desiredTarget = predicted;
-                    }
-                  }
-                }
-                if (!desiredTarget) {
-                  desiredTarget = playerTile;
-                  useAStar = true;
-                }
-                break;
-              }
-              case 'SPRINT':
-                if (distance <= vision) {
-                  desiredTarget = playerTile;
-                }
-                break;
-              case 'WANDER':
-                if (distance <= vision || enemy.chaseMode) {
-                  enemy.chaseMode = true;
-                  if (distance > vision * 2 && !noiseActive) {
-                    enemy.chaseMode = false;
-                  } else {
-                    desiredTarget = playerTile;
-                  }
-                }
-                break;
-              case 'PATROL':
-                if (distance <= vision) {
-                  desiredTarget = playerTile;
-                }
-                break;
-            }
-          }
-        }
-
-        if (!desiredTarget && enemy.returning) {
-          desiredTarget = { ...enemy.home };
-        }
-
-        if (!desiredTarget && enemy.type === 'PATROL' && enemy.waitTimer <= 0 && enemy.patrolTargets.length) {
-          const current = enemy.patrolTargets[enemy.patrolIndex];
-          if (enemy.tileX === current.x && enemy.tileY === current.y) {
-            enemy.patrolIndex = (enemy.patrolIndex + 1) % enemy.patrolTargets.length;
-          }
-          desiredTarget = enemy.patrolTargets[enemy.patrolIndex];
-        }
-
-        if (desiredTarget && enemy.waitTimer <= 0 && enemy.pathCooldown <= 0 && pathBudget > 0) {
-          if (planPath(enemy, grid, desiredTarget, useAStar)) {
-            pathBudget -= 1;
-            const plannedLength = enemy.path.length;
-            if (!enemy.returning && plannedLength > Config.ENEMY_BEHAVIOR.leashDistance) {
-              enemy.returning = true;
-              planPath(enemy, grid, enemy.home, false);
-            } else if (enemy.returning && plannedLength === 0) {
-              enemy.returning = false;
-            } else if (!enemy.returning) {
-              enemy.returning = false;
-            }
-          } else {
-            enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
-          }
-        }
-
-        if (!enemy.path.length && enemy.waitTimer <= 0 && enemy.pathCooldown <= 0) {
-          randomStep(enemy, grid);
-          enemy.pathCooldown = Utils.randRange(Config.ENEMY_BEHAVIOR.pathIntervalMin, Config.ENEMY_BEHAVIOR.pathIntervalMax);
-        }
-
-        const speedFactor =
-          enemy.speedFactor * (distance <= Config.ENEMY_BEHAVIOR.closeDistanceSlow ? Config.ENEMY_BEHAVIOR.closeSpeedFactor : 1);
-        const noiseBoost = noiseActive ? 1 + Config.TRAP.noisePullStrength : 1;
-        let speed = baseSpeed * speedFactor * noiseBoost * delta;
-        if (enemy.waitTimer > 0) speed = 0;
-
-        if (enemy.path.length) {
-          const next = enemy.path[0];
-          const targetX = next.x + 0.5;
-          const targetY = next.y + 0.5;
-          const dx = targetX - enemy.x;
-          const dy = targetY - enemy.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist <= speed || dist < 0.0001) {
-            enemy.x = targetX;
-            enemy.y = targetY;
-            enemy.tileX = next.x;
-            enemy.tileY = next.y;
-            enemy.path.shift();
-          } else if (dist > 0) {
-            enemy.x += (dx / dist) * speed;
-            enemy.y += (dy / dist) * speed;
-          }
-        } else if (enemy.wanderTimer <= 0 && enemy.waitTimer <= 0) {
-          randomStep(enemy, grid);
-          enemy.wanderTimer = Utils.randRange(0.6, 1.6);
-          enemy.pathCooldown = Utils.randRange(
-            Config.ENEMY_BEHAVIOR.pathIntervalMin,
-            Config.ENEMY_BEHAVIOR.pathIntervalMax
-          );
-        }
-      });
-
-      for (let i = enemies.length - 1; i >= 0; i -= 1) {
-        if (enemies[i].dead) {
-          enemies.splice(i, 1);
-        }
-      }
-    }
-
-    return {
-      enemies,
-      spawn,
-      update,
-    };
-  })();
-
-
-  const Ranking = (() => {
-    let enabled = true;
-    const STORAGE_KEY = 'meiro-ranking-v1';
-    let data = [];
-
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      data = saved ? JSON.parse(saved) : [];
-    } catch (err) {
-      enabled = false;
-      document.getElementById('open-ranking').disabled = true;
-      document.getElementById('open-ranking').textContent = '🏆 ランキング不可';
-      dom.rankingList.innerHTML = '<li>ランキングは利用できません</li>';
-    }
-
-    function save() {
-      if (!enabled) return;
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.slice(0, 10)));
-      } catch (err) {
-        enabled = false;
-      }
-    }
-
-    return {
-      add(entry) {
-        if (!enabled) return;
-        data.push(entry);
-        data.sort((a, b) => b.score - a.score);
-        data = data.slice(0, 10);
-        save();
-      },
-      list() {
-        return data;
-      },
-      reset() {
-        if (!enabled) return;
-        data = [];
-        save();
-      },
-      enabled: () => enabled,
-    };
-  })();
-
-  const Score = (() => {
-    let current = 0;
-    return {
-      reset() {
-        current = 0;
-      },
-      addLevel(level, time) {
-        const base = Config.SCORE.base * level;
-        const timePenalty = time * Config.SCORE.timePenalty;
-        current += Math.max(100, base - timePenalty);
-      },
-      get() {
-        return Math.floor(current);
-      },
-    };
-  })();
-
-  const GameState = (() => {
-    const state = {
-      level: 1,
-      playing: false,
-      paused: false,
-      grid: [],
-      start: { x: 1, y: 1 },
-      goal: { x: 0, y: 0 },
-      enemies: EnemyManager.enemies,
-      items: Items.items,
-      traps: Traps.traps,
-      player: Player.state,
-      visible: [],
-      fog: { timer: 0, radius: Config.TRAP.fogRadiusBase },
-      noise: { timer: 0, x: 0, y: 0 },
-      fogActive: false,
-      time: 0,
-      totalTime: 0,
-      lastUpdate: Utils.now(),
-      debug: { grid: false, fogForce: false },
-      loading: false,
-      mazeMeta: { rooms: [], widened: [], junctions: [] },
-    };
-
-    function fullVisibility(grid) {
-      return grid.map((row) => row.map(() => true));
-    }
-
-    function computeMazeSize(level) {
-      const baseW = Config.LEVEL.baseSize.w + (level - 1) * Config.LEVEL.sizeStep;
-      const baseH = Config.LEVEL.baseSize.h + (level - 1) * Config.LEVEL.sizeStep;
-      let cols = baseW;
-      let rows = baseH;
-      const canvasWidth = canvas.clientWidth || window.innerWidth;
-      const canvasHeight = canvas.clientHeight || window.innerHeight;
-      let tile = Math.floor(Math.min(canvasWidth / cols, canvasHeight / rows));
-      while (
-        tile < Config.TILE_MIN &&
-        (cols > Config.LEVEL.baseSize.w || rows > Config.LEVEL.baseSize.h)
-      ) {
-        if (cols > Config.LEVEL.baseSize.w) cols = Math.max(Config.LEVEL.baseSize.w, cols - Config.LEVEL.sizeStep);
-        if (rows > Config.LEVEL.baseSize.h) rows = Math.max(Config.LEVEL.baseSize.h, rows - Config.LEVEL.sizeStep);
-        tile = Math.floor(Math.min(canvasWidth / cols, canvasHeight / rows));
-      }
-      return { cols, rows };
-    }
-
-    function setupLevel() {
-      state.loading = true;
-      dom.loading.classList.remove('hidden');
-      return new Promise((resolve) => {
-        requestAnimationFrame(() => {
-          const { cols, rows } = computeMazeSize(state.level);
-          const { grid: maze, metadata } = Maze.generate(cols, rows);
-          state.grid = maze;
-          state.mazeMeta = metadata;
-          state.start = { x: 1, y: 1 };
-          state.goal = { x: maze[0].length - 2, y: maze.length - 2 };
-          Player.reset(state.start);
-          Input.setPadLabels(false);
-          const minItemsByLevel = Math.max(1, Math.floor(state.level / 2));
-          const baseItems = Math.floor(Config.LEVEL.baseItems * Math.pow(Config.LEVEL.itemDropDecay, state.level - 1));
-          const itemCount = Math.max(minItemsByLevel, baseItems);
-          Items.spawn(maze, itemCount, state.start, state.goal, state.level, metadata);
-          const trapCount = Config.LEVEL.baseTraps + state.level;
-          Traps.spawn(maze, trapCount, state.start, state.goal, state.level, Items.items);
-          const enemyCount = Math.min(Config.LEVEL.baseEnemies + state.level, Config.LEVEL.maxEnemies);
-          EnemyManager.spawn(maze, enemyCount, state.start, state.goal, state.level, metadata);
-          state.fog.timer = 0;
-          state.fog.radius = Math.max(
-            3,
-            Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
-          );
-          state.noise.timer = 0;
-          state.noise.x = -1;
-          state.noise.y = -1;
-          state.fogActive = false;
-          state.visible = fullVisibility(maze);
-          state.time = 0;
-          state.loading = false;
-          dom.loading.classList.add('hidden');
-          Renderer.draw(state);
-          resolve();
-        });
-      });
-    }
-
-    async function startGame() {
-      state.level = 1;
-      Score.reset();
-      state.playing = false;
-      state.paused = false;
-      state.totalTime = 0;
-      state.lastUpdate = Utils.now();
-      dom.resultForm.classList.remove('hidden');
-      dom.pauseOverlay.classList.add('hidden');
-      dom.rankingPanel.classList.add('hidden');
-      showOverlay(null);
-      await setupLevel();
-      dom.pauseButton.disabled = false;
-      dom.virtualPad.setAttribute('aria-hidden', Input.getPadState() === 'hidden' ? 'true' : 'false');
-      state.playing = true;
-      state.paused = false;
-      Audio.play('start');
-      dom.pauseButton.textContent = '⏸ ポーズ';
-    }
-
-    async function nextLevel() {
-      state.playing = false;
-      state.paused = false;
-      state.level += 1;
-      dom.pauseOverlay.classList.add('hidden');
-      dom.pauseButton.disabled = true;
-      await setupLevel();
-      dom.pauseButton.disabled = false;
-      state.playing = true;
-      state.paused = false;
-      Audio.play('start');
-      dom.pauseButton.textContent = '⏸ ポーズ';
-    }
-
-    function gameOver(win) {
-      state.playing = false;
-      dom.virtualPad.setAttribute('aria-hidden', 'true');
-      dom.pauseButton.disabled = true;
-      dom.pauseOverlay.classList.add('hidden');
-      showOverlay('result');
-      dom.resultScore.textContent = Score.get().toString();
-      dom.resultLevel.textContent = state.level.toString();
-      dom.resultTime.textContent = Utils.formatTime(state.totalTime);
-      dom.resultForm.classList.remove('hidden');
-      dom.pauseButton.textContent = '⏸ ポーズ';
-      if (win) {
-        Renderer.addParticle(state.goal.x, state.goal.y, '#fff');
-      }
-      Renderer.draw(state);
-    }
-
-    function update() {
-      const now = Utils.now();
-      const delta = Math.min(0.05, now - state.lastUpdate);
-      state.lastUpdate = now;
-      dom.pauseOverlay.classList.toggle('hidden', !(state.paused && state.playing));
-      if (state.paused || !state.playing) return;
-      state.time += delta;
-      state.totalTime += delta;
-      Player.update(delta, state.grid);
-
-      if (Input.consumeDash()) {
-        if (Player.tryDash() && ConfigStore.get('vibration') && navigator.vibrate) {
-          navigator.vibrate(20);
-        }
-      }
-      if (Input.consumeSmoke()) {
-        if (Player.useSmoke()) {
-          Audio.play('item');
-          Renderer.addParticle(state.player.tileX, state.player.tileY, '#adb5ff');
-        }
-      }
-
-      if (state.player.invincibleTimer > 0) {
-        if (state.player.trapTimer > 0 || state.player.trapType) {
-          state.player.trapTimer = 0;
-          state.player.trapType = null;
-          Input.setPadLabels(false);
-        }
-        state.fog.timer = 0;
-        state.noise.timer = 0;
-        state.noise.x = -1;
-        state.noise.y = -1;
-      }
-
-      if (state.fog.timer > 0) {
-        state.fog.timer = Math.max(0, state.fog.timer - delta);
-        state.fogActive = true;
-        if (state.player.trapType === 'fog') {
-          state.player.trapTimer = state.fog.timer;
-          if (state.fog.timer <= 0) {
-            state.player.trapType = null;
-            state.player.trapTimer = 0;
-          }
-        }
-        if (state.fog.timer <= 0) {
-          state.fogActive = false;
-        }
-      } else {
-        state.fogActive = false;
-      }
-
-      if (state.noise.timer > 0) {
-        state.noise.timer = Math.max(0, state.noise.timer - delta);
-        if (state.player.trapType === 'noise') {
-          state.player.trapTimer = state.noise.timer;
-          if (state.noise.timer <= 0) {
-            state.player.trapType = null;
-            state.player.trapTimer = 0;
-            state.noise.x = -1;
-            state.noise.y = -1;
-          }
-        }
-      } else if (state.player.trapType === 'noise') {
-        state.player.trapType = null;
-        state.player.trapTimer = 0;
-        state.noise.x = -1;
-        state.noise.y = -1;
-      }
-
-      EnemyManager.update(delta, state.grid, state.player, { noise: state.noise });
-      Renderer.updateParticles(delta);
-
-      const fogShouldRender =
-        (state.fogActive && ConfigStore.get('fog')) || state.debug.fogForce;
-      state.visible = fogShouldRender
-        ? FogOfWar.compute(state.grid, { x: state.player.tileX, y: state.player.tileY }, state.fog.radius)
-        : fullVisibility(state.grid);
-
-      // check item pickup
-      const item = Items.take(state.player.tileX, state.player.tileY);
-      if (item) {
-        if (ConfigStore.get('vibration') && navigator.vibrate) navigator.vibrate(30);
-        let particleColor = '#9ef01a';
-        switch (item.type) {
-          case 'attack':
-            state.player.attackTimer = Config.ITEM.attackDuration;
-            particleColor = '#9ef01a';
-            break;
-          case 'invincible':
-            state.player.invincibleTimer = Config.ITEM.invincibleDuration;
-            state.player.trapType = null;
-            state.player.trapTimer = 0;
-            Input.setPadLabels(false);
-            particleColor = '#ffd60a';
-            break;
-          case 'smoke':
-            Player.addSmokeCharge();
-            particleColor = '#adb5ff';
-            break;
-        }
-        Audio.play('item');
-        Renderer.addParticle(state.player.tileX, state.player.tileY, particleColor);
-      }
-
-      // check traps
-      const trap = Traps.find(state.player.tileX, state.player.tileY);
-      if (trap && state.player.invincibleTimer <= 0) {
-        const trapIntensity = 1 + Math.min(0.5, (state.level - 1) * 0.05);
-        let activated = false;
-        switch (trap.type) {
-          case 'slow':
-            if (state.player.trapTimer <= 0) {
-              state.player.trapType = 'slow';
-              state.player.trapTimer = Config.TRAP.slowDuration * trapIntensity;
-              activated = true;
-            }
-            break;
-          case 'snare':
-            if (state.player.trapTimer <= 0) {
-              state.player.freezeTimer = Config.TRAP.snareDuration * trapIntensity;
-              state.player.trapType = 'snare';
-              state.player.trapTimer = Config.TRAP.snareDuration * trapIntensity;
-              activated = true;
-            }
-            break;
-          case 'reverse':
-            if (state.player.trapTimer <= 0) {
-              state.player.trapType = 'reverse';
-              state.player.trapTimer = Config.TRAP.reverseDuration * trapIntensity;
-              Input.setPadLabels(true);
-              activated = true;
-            }
-            break;
-          case 'fog':
-            state.fog.timer = Config.TRAP.fogDuration * trapIntensity;
-            state.fog.radius = Math.max(
-              3,
-              Math.floor(ConfigStore.get('viewRadius') - (state.level - 1) * Config.TRAP.fogRadiusLevelStep)
-            );
-            state.player.trapType = 'fog';
-            state.player.trapTimer = state.fog.timer;
-            state.fogActive = true;
-            activated = true;
-            break;
-          case 'noise':
-            state.noise.timer = Config.TRAP.noiseDuration * trapIntensity;
-            state.noise.x = trap.x;
-            state.noise.y = trap.y;
-            state.player.trapType = 'noise';
-            state.player.trapTimer = state.noise.timer;
-            activated = true;
-            break;
-        }
-        if (activated) {
-          Traps.consume(state.player.tileX, state.player.tileY);
-          if (ConfigStore.get('vibration') && navigator.vibrate) navigator.vibrate([60, 20, 60]);
-          Audio.play('trap');
-          const colorMap = {
-            slow: '#00f5d4',
-            snare: '#ffbe0b',
-            reverse: '#f94144',
-            fog: '#adb5ff',
-            noise: '#ff9e00',
-          };
-          Renderer.setShake(trap.type === 'fog' ? 3 : trap.type === 'noise' ? 4 : 5);
-          Renderer.addParticle(state.player.tileX, state.player.tileY, colorMap[trap.type] || '#f94144');
-        }
-      }
-
-      if (state.player.invincibleTimer > 0 && state.player.trapType === 'snare') {
-        state.player.trapType = null;
-        Input.setPadLabels(false);
-      }
-
-      // collisions
-      state.enemies.forEach((enemy) => {
-        const dist = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
-        if (dist < 0.6) {
-          if (state.player.attackTimer > 0) {
-            enemy.dead = true;
-            Renderer.addParticle(enemy.tileX, enemy.tileY, '#ff6b6b');
-          } else if (state.player.invincibleTimer > 0) {
-            Renderer.setShake(6);
-          } else {
-            Audio.play('hit');
-            Renderer.setShake(12);
-            gameOver(false);
-          }
-        }
-      });
-      // goal check
-      if (state.player.tileX === state.goal.x && state.player.tileY === state.goal.y) {
-        state.playing = false;
-        Score.addLevel(state.level, state.time);
-        Audio.play('goal');
-        Renderer.addParticle(state.player.tileX, state.player.tileY, '#74c69d');
-        nextLevel();
-      }
-    }
-
-    async function preparePreview() {
-      state.level = 1;
-      state.playing = false;
-      state.paused = false;
-      Score.reset();
-      state.totalTime = 0;
-      dom.virtualPad.setAttribute('aria-hidden', 'true');
-      dom.pauseButton.disabled = true;
-      dom.pauseButton.textContent = '⏸ ポーズ';
-      dom.pauseOverlay.classList.add('hidden');
-      await setupLevel();
-      Renderer.draw(state);
-    }
-
-    return {
-      state,
-      startGame,
-      nextLevel,
-      update,
-      setupLevel,
-      gameOver,
-      preparePreview,
-    };
-  })();
-
-  function renderLoop() {
-    requestAnimationFrame(renderLoop);
-    GameState.update();
-    if (GameState.state.playing) {
-      Renderer.draw(GameState.state);
-    }
+const Config = {
+  tileSize: 28,
+  mapWidth: 61,
+  mapHeight: 61,
+  minRooms: 6,
+  maxRooms: 12,
+  roomMinSize: 4,
+  roomMaxSize: 8,
+  baseEnemies: 7,
+  baseItems: 12,
+  baseTraps: 10,
+  braidRatioRange: [0.25, 0.45],
+  branchRatioTarget: 0.15,
+  corridorWidenChance: 0.4,
+  hungerPerTurn: 1,
+  hungerDamage: 3,
+  maxInventory: 20,
+  fogRadius: 5,
+  graceTurns: 2,
+  swipeThreshold: 30,
+  padDragDelay: 220,
+  xpTable: [0, 25, 55, 95, 145, 205, 275, 360, 450, 560],
+};
+
+const Terrain = {
+  WALL: "wall",
+  ROOM: "room",
+  FLOOR: "floor",
+  WATER: "water",
+  GRASS: "grass",
+  ROCK: "rock",
+  STAIRS: "stairs",
+};
+
+const TrapType = {
+  SLOW: "slow",
+  SNARE: "snare",
+  REVERSE: "reverse",
+  FOG: "fog",
+  NOISE: "noise",
+};
+
+const ItemType = {
+  SWORD: "sword",
+  SHIELD: "shield",
+  HERB: "herb",
+  SCROLL: "scroll",
+  BREAD: "bread",
+  STONE: "stone",
+};
+
+const EnemyType = {
+  SPRINTER: "sprinter",
+  STRATEGIST: "strategist",
+  WANDERER: "wanderer",
+};
+
+const Directions = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+
+const DirectionNames = {
+  up: "上",
+  down: "下",
+  left: "左",
+  right: "右",
+};
+
+const DirectionKeys = {
+  ArrowUp: "up",
+  KeyW: "up",
+  ArrowDown: "down",
+  KeyS: "down",
+  ArrowLeft: "left",
+  KeyA: "left",
+  ArrowRight: "right",
+  KeyD: "right",
+};
+
+const Action = {
+  MOVE: "move",
+  WAIT: "wait",
+};
+
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randChoice(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+function shuffle(array) {
+  const a = array.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function key(x, y) {
+  return `${x},${y}`;
+}
+
+class Tile {
+  constructor(type = Terrain.WALL) {
+    this.terrain = type;
+    this.trap = null;
+    this.decoration = null;
+    this.item = null;
+    this.roomId = null;
   }
 
-  function showOverlay(name) {
-    Object.entries(dom.overlays).forEach(([key, el]) => {
-      if (!el) return;
-      if (key === name) {
-        el.classList.remove('hidden');
-      } else {
-        el.classList.add('hidden');
-      }
-    });
+  isWalkable() {
+    return this.terrain !== Terrain.WALL && this.terrain !== Terrain.ROCK;
+  }
+}
+
+class UnionFind {
+  constructor(n) {
+    this.parent = Array.from({ length: n }, (_, i) => i);
+    this.rank = Array(n).fill(0);
   }
 
-  function renderRanking() {
-    dom.rankingList.innerHTML = '';
-    if (!Ranking.enabled()) {
-      dom.rankingList.innerHTML = '<li>ランキングは利用できません</li>';
+  find(x) {
+    if (this.parent[x] !== x) this.parent[x] = this.find(this.parent[x]);
+    return this.parent[x];
+  }
+
+  union(a, b) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return false;
+    if (this.rank[ra] < this.rank[rb]) {
+      this.parent[ra] = rb;
+    } else if (this.rank[ra] > this.rank[rb]) {
+      this.parent[rb] = ra;
     } else {
-      const list = Ranking.list();
-      if (!list.length) {
-        dom.rankingList.innerHTML = '<li>記録なし</li>';
-        return;
+      this.parent[rb] = ra;
+      this.rank[ra]++;
+    }
+    return true;
+  }
+}
+
+class DungeonGenerator {
+  constructor(width, height, depth) {
+    this.width = width | 1;
+    this.height = height | 1;
+    this.depth = depth;
+    this.grid = Array.from({ length: this.height }, () =>
+      Array.from({ length: this.width }, () => new Tile())
+    );
+    this.rooms = [];
+  }
+
+  generate() {
+    this.placeRooms();
+    this.connectRooms();
+    this.braidDeadEnds();
+    this.forceBranching();
+    this.ensureAlternateRoute();
+    this.widenCorridors();
+    this.decorateTerrain();
+    return { tiles: this.grid, rooms: this.rooms };
+  }
+
+  placeRooms() {
+    const targetRooms = randInt(Config.minRooms, Config.maxRooms);
+    let attempts = 0;
+    const limit = 400;
+    while (this.rooms.length < targetRooms && attempts < limit) {
+      attempts++;
+      const w = randInt(Config.roomMinSize, Config.roomMaxSize);
+      const h = randInt(Config.roomMinSize, Config.roomMaxSize);
+      const x = randInt(1, this.width - w - 2);
+      const y = randInt(1, this.height - h - 2);
+      if (!this.canPlaceRoom(x, y, w, h)) continue;
+      const roomId = this.rooms.length;
+      for (let yy = y; yy < y + h; yy++) {
+        for (let xx = x; xx < x + w; xx++) {
+          const tile = this.grid[yy][xx];
+          tile.terrain = Terrain.ROOM;
+          tile.roomId = roomId;
+        }
       }
-      list.forEach((entry) => {
-        const li = document.createElement('li');
-        li.textContent = `${entry.initials} : ${entry.score}点 Lv${entry.level} ${entry.time}s (${entry.date})`;
-        dom.rankingList.appendChild(li);
+      const center = { x: Math.floor(x + w / 2), y: Math.floor(y + h / 2) };
+      this.rooms.push({ x, y, w, h, center });
+    }
+    if (this.rooms.length < Config.minRooms) {
+      // fallback regenerate with smaller bounds
+      this.grid = Array.from({ length: this.height }, () =>
+        Array.from({ length: this.width }, () => new Tile())
+      );
+      this.rooms = [];
+      this.placeRooms();
+    }
+  }
+
+  canPlaceRoom(x, y, w, h) {
+    for (let yy = y - 1; yy <= y + h; yy++) {
+      for (let xx = x - 1; xx <= x + w; xx++) {
+        if (xx < 1 || yy < 1 || xx >= this.width - 1 || yy >= this.height - 1) return false;
+        if (this.grid[yy][xx].terrain !== Terrain.WALL) return false;
+      }
+    }
+    return true;
+  }
+
+  carvePath(ax, ay, bx, by) {
+    let x = ax;
+    let y = ay;
+    while (x !== bx) {
+      const tile = this.grid[y][x];
+      if (tile.terrain === Terrain.WALL) tile.terrain = Terrain.FLOOR;
+      x += x < bx ? 1 : -1;
+    }
+    while (y !== by) {
+      const tile = this.grid[y][x];
+      if (tile.terrain === Terrain.WALL) tile.terrain = Terrain.FLOOR;
+      y += y < by ? 1 : -1;
+    }
+    const tile = this.grid[y][x];
+    if (tile.terrain === Terrain.WALL) tile.terrain = Terrain.FLOOR;
+  }
+
+  connectRooms() {
+    if (this.rooms.length <= 1) return;
+    const edges = [];
+    for (let i = 0; i < this.rooms.length; i++) {
+      for (let j = i + 1; j < this.rooms.length; j++) {
+        const a = this.rooms[i].center;
+        const b = this.rooms[j].center;
+        const d = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+        edges.push({ i, j, d });
+      }
+    }
+    edges.sort((a, b) => a.d - b.d);
+    const uf = new UnionFind(this.rooms.length);
+    for (const edge of edges) {
+      if (uf.union(edge.i, edge.j)) {
+        this.carvePath(
+          this.rooms[edge.i].center.x,
+          this.rooms[edge.i].center.y,
+          this.rooms[edge.j].center.x,
+          this.rooms[edge.j].center.y
+        );
+      }
+    }
+    const extra = Math.max(2, Math.floor(this.rooms.length / 2));
+    for (let i = 0; i < extra; i++) {
+      const a = randChoice(this.rooms);
+      const b = randChoice(this.rooms);
+      if (a === b) continue;
+      this.carvePath(a.center.x, a.center.y, b.center.x, b.center.y);
+    }
+  }
+
+  neighbors(x, y) {
+    const list = [];
+    if (x > 0) list.push({ x: x - 1, y });
+    if (x < this.width - 1) list.push({ x: x + 1, y });
+    if (y > 0) list.push({ x, y: y - 1 });
+    if (y < this.height - 1) list.push({ x, y: y + 1 });
+    return list;
+  }
+
+  walkableCount(x, y) {
+    return this.neighbors(x, y).filter(({ x: nx, y: ny }) => this.grid[ny][nx].isWalkable()).length;
+  }
+
+  findDeadEnds() {
+    const list = [];
+    for (let y = 1; y < this.height - 1; y++) {
+      for (let x = 1; x < this.width - 1; x++) {
+        const tile = this.grid[y][x];
+        if (tile.terrain === Terrain.FLOOR && this.walkableCount(x, y) === 1) {
+          list.push({ x, y });
+        }
+      }
+    }
+    return list;
+  }
+
+  braidDeadEnds() {
+    const dead = this.findDeadEnds();
+    if (!dead.length) return;
+    const ratio = Math.random() * (Config.braidRatioRange[1] - Config.braidRatioRange[0]) + Config.braidRatioRange[0];
+    const target = Math.floor(dead.length * ratio);
+    let braided = 0;
+    for (const cell of shuffle(dead)) {
+      if (braided >= target) break;
+      const candidates = this.neighbors(cell.x, cell.y).filter(({ x, y }) => {
+        const tile = this.grid[y][x];
+        if (tile.terrain !== Terrain.WALL) return false;
+        const around = this.neighbors(x, y).filter(({ x: nx, y: ny }) => this.grid[ny][nx].isWalkable());
+        return around.length >= 2;
       });
+      if (candidates.length) {
+        const choice = randChoice(candidates);
+        this.grid[choice.y][choice.x].terrain = Terrain.FLOOR;
+        braided++;
+      }
     }
   }
 
-  function updateHUD() {
-    const player = GameState.state.player;
-    dom.hudLevel.textContent = GameState.state.level.toString();
-    dom.hudScore.textContent = Score.get().toString();
-    const trapLabelMap = {
-      slow: '減速',
-      snare: '拘束',
-      reverse: '逆操作',
-      fog: '霧',
-      noise: 'ノイズ',
+  forceBranching() {
+    const corridors = [];
+    for (let y = 1; y < this.height - 1; y++) {
+      for (let x = 1; x < this.width - 1; x++) {
+        const tile = this.grid[y][x];
+        if (tile.terrain === Terrain.FLOOR && tile.roomId === null) corridors.push({ x, y });
+      }
+    }
+    if (!corridors.length) return;
+    const junctions = corridors.filter(({ x, y }) => this.walkableCount(x, y) >= 3);
+    let ratio = junctions.length / corridors.length;
+    let guard = 0;
+    while (ratio < Config.branchRatioTarget && guard < 200) {
+      guard++;
+      const cell = randChoice(corridors);
+      const walls = this.neighbors(cell.x, cell.y).filter(({ x, y }) => this.grid[y][x].terrain === Terrain.WALL);
+      if (!walls.length) continue;
+      const target = randChoice(walls);
+      const neighbors = this.neighbors(target.x, target.y).filter(
+        ({ x, y }) => !(x === cell.x && y === cell.y) && this.grid[y][x].terrain !== Terrain.WALL
+      );
+      if (!neighbors.length) continue;
+      this.grid[target.y][target.x].terrain = Terrain.FLOOR;
+      ratio = corridors.filter(({ x, y }) => this.walkableCount(x, y) >= 3).length / corridors.length;
+    }
+  }
+
+  ensureAlternateRoute() {
+    if (this.rooms.length < 2) return;
+    const start = this.rooms[0].center;
+    const goal = this.rooms[this.rooms.length - 1].center;
+    const path = this.shortestPath(start, goal);
+    if (!path) return;
+    const candidates = [];
+    for (const point of path) {
+      for (const neighbor of this.neighbors(point.x, point.y)) {
+        const tile = this.grid[neighbor.y][neighbor.x];
+        if (tile.terrain !== Terrain.WALL) continue;
+        const beyond = this.neighbors(neighbor.x, neighbor.y).filter(
+          ({ x, y }) => !(x === point.x && y === point.y) && this.grid[y][x].terrain !== Terrain.WALL
+        );
+        if (beyond.length) candidates.push({ x: neighbor.x, y: neighbor.y });
+      }
+    }
+    if (candidates.length) {
+      const extra = randChoice(candidates);
+      this.grid[extra.y][extra.x].terrain = Terrain.FLOOR;
+    }
+  }
+
+  shortestPath(start, goal) {
+    const frontier = [start];
+    const visited = new Set([key(start.x, start.y)]);
+    const parent = new Map();
+    while (frontier.length) {
+      const current = frontier.shift();
+      if (current.x === goal.x && current.y === goal.y) {
+        const path = [];
+        let node = key(goal.x, goal.y);
+        while (node) {
+          const [nx, ny] = node.split(",").map(Number);
+          path.unshift({ x: nx, y: ny });
+          node = parent.get(node) || null;
+        }
+        return path;
+      }
+      for (const { x, y } of this.neighbors(current.x, current.y)) {
+        const tile = this.grid[y][x];
+        if (!tile.isWalkable() && tile.terrain !== Terrain.ROOM) continue;
+        const k = key(x, y);
+        if (visited.has(k)) continue;
+        visited.add(k);
+        parent.set(k, key(current.x, current.y));
+        frontier.push({ x, y });
+      }
+    }
+    return null;
+  }
+
+  widenCorridors() {
+    for (let y = 1; y < this.height - 1; y++) {
+      let run = 0;
+      for (let x = 1; x < this.width - 1; x++) {
+        const tile = this.grid[y][x];
+        if (tile.terrain === Terrain.FLOOR && tile.roomId === null) {
+          const left = this.grid[y][x - 1];
+          const right = this.grid[y][x + 1];
+          const neighbors = this.walkableCount(x, y);
+          const straight = left && right && left.isWalkable() && right.isWalkable() && neighbors === 2;
+          if (straight) {
+            run++;
+          } else {
+            if (run > 10 && Math.random() < Config.corridorWidenChance) {
+              for (let i = x - run; i < x; i++) {
+                const up = this.grid[y - 1][i];
+                if (up.terrain === Terrain.WALL) up.terrain = Terrain.FLOOR;
+              }
+            }
+            run = 0;
+          }
+        } else {
+          if (run > 10 && Math.random() < Config.corridorWidenChance) {
+            for (let i = x - run; i < x; i++) {
+              const up = this.grid[y - 1][i];
+              if (up.terrain === Terrain.WALL) up.terrain = Terrain.FLOOR;
+            }
+          }
+          run = 0;
+        }
+      }
+    }
+  }
+
+  decorateTerrain() {
+    for (let y = 1; y < this.height - 1; y++) {
+      for (let x = 1; x < this.width - 1; x++) {
+        const tile = this.grid[y][x];
+        if (tile.terrain === Terrain.FLOOR && Math.random() < 0.05) {
+          tile.decoration = randChoice([Terrain.WATER, Terrain.GRASS]);
+        } else if (tile.terrain === Terrain.ROOM && Math.random() < 0.03) {
+          tile.decoration = Terrain.GRASS;
+        }
+      }
+    }
+    for (let i = 0; i < 25; i++) {
+      const x = randInt(1, this.width - 2);
+      const y = randInt(1, this.height - 2);
+      const tile = this.grid[y][x];
+      if (tile.terrain === Terrain.FLOOR && !tile.decoration && Math.random() < 0.4) {
+        tile.decoration = Terrain.ROCK;
+      }
+    }
+  }
+}
+
+class Entity {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.energy = 0;
+    this.maxHp = 1;
+    this.hp = 1;
+    this.attack = 1;
+    this.defense = 0;
+    this.status = {
+      slow: 0,
+      snare: 0,
+      blind: 0,
+      sleep: 0,
     };
-    dom.statusAttack.textContent = player.attackTimer > 0 ? `${player.attackTimer.toFixed(1)}s` : '-';
-    dom.statusInvincible.textContent = player.invincibleTimer > 0 ? `${player.invincibleTimer.toFixed(1)}s` : '-';
-    dom.statusTrap.textContent =
-      player.trapTimer > 0 && player.trapType
-        ? `${trapLabelMap[player.trapType] || ''} ${player.trapTimer.toFixed(1)}s`
-        : '-';
-    const fieldStatuses = [];
-    if (GameState.state.fog.timer > 0 && ConfigStore.get('fog')) {
-      fieldStatuses.push(`フォグ ${GameState.state.fog.timer.toFixed(1)}s`);
-    }
-    if (GameState.state.noise.timer > 0) {
-      fieldStatuses.push(`ノイズ ${GameState.state.noise.timer.toFixed(1)}s`);
-    }
-    dom.statusField.textContent = fieldStatuses.length ? fieldStatuses.join(' / ') : '-';
-    dom.statusDash.textContent =
-      player.dashCooldown > 0 ? `${player.dashCooldown.toFixed(1)}s` : 'Ready';
-    dom.statusSmoke.textContent =
-      player.smokeTimer > 0 ? `${player.smokeTimer.toFixed(1)}s` : `${player.smokeCharges}`;
-    dom.dashButton.disabled = player.dashCooldown > 0;
-    dom.smokeButton.disabled = player.smokeTimer > 0 || player.smokeCharges <= 0;
   }
 
-  function hudLoop() {
-    updateHUD();
-    requestAnimationFrame(hudLoop);
+  isAlive() {
+    return this.hp > 0;
+  }
+}
+
+class Player extends Entity {
+  constructor(x, y) {
+    super(x, y);
+    this.type = "player";
+    this.maxHp = 30;
+    this.hp = this.maxHp;
+    this.baseAttack = 5;
+    this.baseDefense = 2;
+    this.attack = this.baseAttack;
+    this.defense = this.baseDefense;
+    this.level = 1;
+    this.exp = 0;
+    this.hunger = 100;
+    this.effects = {
+      reverse: 0,
+      fog: 0,
+      slow: 0,
+      snare: 0,
+    };
+    this.inventory = [];
+    this.equipment = {
+      sword: null,
+      shield: null,
+    };
+    this.kills = 0;
+  }
+}
+
+class Enemy extends Entity {
+  constructor(x, y, type, depth) {
+    super(x, y);
+    this.type = type;
+    const baseAttack = 6 + depth * 2;
+    if (type === EnemyType.SPRINTER) {
+      this.maxHp = 12 + depth * 2;
+      this.attack = baseAttack;
+      this.defense = 2 + depth;
+      this.speed = 130;
+    } else if (type === EnemyType.STRATEGIST) {
+      this.maxHp = 18 + depth * 2;
+      this.attack = baseAttack + 2;
+      this.defense = 3 + depth;
+      this.speed = 100;
+    } else {
+      this.maxHp = 16 + depth * 2;
+      this.attack = baseAttack - 1;
+      this.defense = 2 + depth;
+      this.speed = 90;
+    }
+    this.hp = this.maxHp;
+    this.energy = 0;
+    this.aware = false;
+    this.grace = Config.graceTurns;
+  }
+}
+
+let cryptoId = 0;
+function generateId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  cryptoId += 1;
+  return `id-${Date.now()}-${cryptoId}`;
+}
+
+class Item {
+  constructor(type, bonus = 0) {
+    this.id = generateId();
+    this.type = type;
+    this.bonus = bonus;
   }
 
-  function resizeCanvas() {
+  get label() {
+    switch (this.type) {
+      case ItemType.SWORD:
+        return `剣+${this.bonus}`;
+      case ItemType.SHIELD:
+        return `盾+${this.bonus}`;
+      case ItemType.HERB:
+        return "草";
+      case ItemType.SCROLL:
+        return "巻";
+      case ItemType.BREAD:
+        return "パン";
+      case ItemType.STONE:
+        return "石";
+      default:
+        return "?";
+    }
+  }
+}
+
+class Game {
+  constructor() {
+    this.canvas = document.getElementById("game-canvas");
+    this.ctx = this.canvas.getContext("2d");
+    this.messageLog = document.getElementById("message-log");
+    this.toast = document.getElementById("toast");
+    this.depth = 1;
+    this.turn = 0;
+    this.entities = [];
+    this.items = [];
+    this.map = null;
+    this.rooms = [];
+    this.player = null;
+    this.state = "tutorial";
+    this.pendingThrow = null;
+    this.playerSlowGate = false;
+    this.visualViewport = window.visualViewport;
+    this.logMessages = [];
+
+    this.resizeCanvas = this.resizeCanvas.bind(this);
+    window.addEventListener("resize", this.resizeCanvas);
+    if (this.visualViewport) {
+      this.visualViewport.addEventListener("resize", this.resizeCanvas);
+    }
+
+    this.bindUI();
+    this.initInput();
+    this.resizeCanvas();
+    this.showTutorial();
+  }
+
+  bindUI() {
+    document.getElementById("tutorial-close").addEventListener("click", () => {
+      document.getElementById("tutorial").classList.add("hidden");
+      this.state = "running";
+      this.startNewRun();
+    });
+
+    document.getElementById("pad-menu").addEventListener("click", () => this.openInventory());
+    document.getElementById("close-menu").addEventListener("click", () => this.closeInventory());
+
+    document.getElementById("ranking-button").addEventListener("click", () => this.showRanking());
+    document.getElementById("close-ranking").addEventListener("click", () => {
+      document.getElementById("ranking-overlay").classList.add("hidden");
+    });
+    document.getElementById("reset-ranking").addEventListener("click", () => {
+      localStorage.removeItem("rogueRanking");
+      this.updateRankingList();
+    });
+
+    document.getElementById("retry-button").addEventListener("click", () => {
+      document.getElementById("result-overlay").classList.add("hidden");
+      this.state = "running";
+      this.startNewRun();
+    });
+
+    document.getElementById("result-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = document.getElementById("result-name").value || "???";
+      this.saveRanking(name);
+      document.getElementById("result-overlay").classList.add("hidden");
+      this.showRanking();
+    });
+
+    document.getElementById("pad-toggle").addEventListener("click", () => this.cyclePadState());
+    this.initPadDrag();
+  }
+
+  resizeCanvas() {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    Renderer.resize(width, height);
-    if (GameState.state.grid.length) {
-      Renderer.draw(GameState.state);
+    this.canvas.width = width * window.devicePixelRatio;
+    this.canvas.height = height * window.devicePixelRatio;
+    this.ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+    this.draw();
+  }
+
+  showTutorial() {
+    document.getElementById("tutorial").classList.remove("hidden");
+  }
+
+  startNewRun() {
+    this.depth = 1;
+    this.turn = 0;
+    this.playerSlowGate = false;
+    this.logMessages = [];
+    this.generateFloor();
+    this.updateHUD();
+    this.draw();
+    this.pushMessage("地下1Fに降り立った。周囲を探索しよう。");
+  }
+
+  generateFloor() {
+    const generator = new DungeonGenerator(Config.mapWidth, Config.mapHeight, this.depth);
+    const result = generator.generate();
+    this.map = result.tiles;
+    this.rooms = result.rooms;
+    const startRoom = this.rooms[0];
+    const stairsRoom = this.rooms[this.rooms.length - 1];
+    this.map[stairsRoom.center.y][stairsRoom.center.x].terrain = Terrain.STAIRS;
+    this.player = new Player(startRoom.center.x, startRoom.center.y);
+    this.entities = [this.player];
+    this.items = [];
+    this.recalculateStats();
+    this.placeInitialItems(startRoom);
+    this.populateItems();
+    this.populateTraps();
+    this.spawnEnemies(startRoom.center);
+    this.turn = 0;
+  }
+
+  randomFloorTile(options = {}) {
+    const attempts = 200;
+    for (let i = 0; i < attempts; i++) {
+      const x = randInt(1, this.map[0].length - 2);
+      const y = randInt(1, this.map.length - 2);
+      const tile = this.map[y][x];
+      if (!tile.isWalkable()) continue;
+      if (tile.terrain === Terrain.STAIRS) continue;
+      if (options.avoid) {
+        const d2 = (x - options.avoid.x) ** 2 + (y - options.avoid.y) ** 2;
+        if (d2 < options.avoid.radius * options.avoid.radius) continue;
+      }
+      if (this.entities.some((e) => e.x === x && e.y === y)) continue;
+      return { tile, x, y };
+    }
+    return null;
+  }
+
+  placeInitialItems(startRoom) {
+    const safeRadius = randInt(3, 8);
+    let placed = false;
+    for (let attempt = 0; attempt < 40 && !placed; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const r = randInt(1, safeRadius);
+      const x = clamp(Math.floor(startRoom.center.x + Math.cos(angle) * r), 1, this.map[0].length - 2);
+      const y = clamp(Math.floor(startRoom.center.y + Math.sin(angle) * r), 1, this.map.length - 2);
+      const tile = this.map[y][x];
+      if (!tile.isWalkable() || tile.item) continue;
+      const item = new Item(Math.random() < 0.5 ? ItemType.HERB : ItemType.SCROLL);
+      tile.item = item;
+      placed = true;
     }
   }
 
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
-
-  renderLoop();
-  hudLoop();
-
-  showOverlay('title');
-  GameState.preparePreview();
-
-  const tutorialKey = 'maze-dpad-tutorial-v1';
-  let tutorialSeen = false;
-  try {
-    tutorialSeen = localStorage.getItem(tutorialKey) === '1';
-  } catch (err) {
-    tutorialSeen = false;
-  }
-  if (!tutorialSeen) {
-    dom.tutorial.classList.remove('hidden');
-  }
-
-  dom.tutorialClose.addEventListener('click', () => {
-    dom.tutorial.classList.add('hidden');
-    try {
-      localStorage.setItem(tutorialKey, '1');
-    } catch (err) {
-      // ignore
+  populateItems() {
+    const count = Config.baseItems + Math.floor(this.depth * 1.5);
+    for (let i = 0; i < count; i++) {
+      const found = this.randomFloorTile();
+      if (!found) continue;
+      const { tile, x, y } = found;
+      if (tile.item) continue;
+      const roll = Math.random();
+      let item;
+      if (roll < 0.25) {
+        item = new Item(ItemType.HERB);
+      } else if (roll < 0.45) {
+        item = new Item(ItemType.SCROLL);
+      } else if (roll < 0.65) {
+        item = new Item(ItemType.BREAD);
+      } else if (roll < 0.78) {
+        item = new Item(ItemType.STONE);
+      } else if (roll < 0.9) {
+        item = new Item(ItemType.SWORD, randInt(1, 2 + Math.floor(this.depth / 3)));
+      } else {
+        item = new Item(ItemType.SHIELD, randInt(1, 2 + Math.floor(this.depth / 3)));
+      }
+      tile.item = item;
+      this.items.push({ item, x, y });
     }
-  });
+  }
 
-  dom.startButton.addEventListener('click', () => {
-    GameState.startGame();
-  });
-
-  dom.retryButton.addEventListener('click', () => {
-    GameState.startGame();
-  });
-
-  dom.backTitle.addEventListener('click', () => {
-    showOverlay('title');
-    dom.rankingPanel.classList.add('hidden');
-    GameState.preparePreview();
-  });
-
-  dom.howtoBtn.addEventListener('click', () => {
-    dom.howto.classList.toggle('hidden');
-  });
-
-  dom.openRanking.addEventListener('click', () => {
-    dom.rankingPanel.classList.remove('hidden');
-    renderRanking();
-  });
-
-  dom.resetRanking.addEventListener('click', () => {
-    if (confirm('ランキングを初期化しますか？')) {
-      Ranking.reset();
-      renderRanking();
+  populateTraps() {
+    const count = Config.baseTraps + this.depth * 3;
+    for (let i = 0; i < count; i++) {
+      const found = this.randomFloorTile();
+      if (!found) continue;
+      const { tile } = found;
+      if (tile.trap) continue;
+      tile.trap = { type: randChoice(Object.values(TrapType)), armed: true };
     }
-  });
+  }
 
-  dom.closeRanking.addEventListener('click', () => {
-    dom.rankingPanel.classList.add('hidden');
-  });
+  spawnEnemies(startCenter) {
+    const count = Config.baseEnemies + Math.floor(this.depth * 1.6);
+    const safeRadius = 6;
+    const types = [EnemyType.SPRINTER, EnemyType.STRATEGIST, EnemyType.WANDERER];
+    for (let i = 0; i < count; i++) {
+      const found = this.randomFloorTile({ avoid: { x: startCenter.x, y: startCenter.y, radius: safeRadius } });
+      if (!found) continue;
+      const { x, y } = found;
+      const enemy = new Enemy(x, y, randChoice(types), this.depth);
+      this.entities.push(enemy);
+    }
+  }
 
-  dom.openSettings.addEventListener('click', () => {
-    dom.settingsPanel.classList.remove('hidden');
-  });
+  initInput() {
+    document.addEventListener("keydown", (e) => {
+      if (this.state !== "running") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        this.handleAction(Action.WAIT);
+        return;
+      }
+      if (e.code === "KeyG") {
+        this.debugGrid = !this.debugGrid;
+        this.draw();
+        return;
+      }
+      if (e.code === "KeyF") {
+        this.player.effects.fog = this.player.effects.fog ? 0 : 999;
+        this.draw();
+        return;
+      }
+      if (e.code === "KeyN") {
+        this.nextFloor();
+        return;
+      }
+      if (e.code === "KeyB") {
+        this.debugBranch = !this.debugBranch;
+        this.draw();
+        return;
+      }
+      const dirKey = DirectionKeys[e.code];
+      if (dirKey) {
+        e.preventDefault();
+        this.handleMove(dirKey);
+      }
+    });
 
-  dom.closeSettings.addEventListener('click', () => {
-    dom.settingsPanel.classList.add('hidden');
-  });
-
-  dom.toggleSound.addEventListener('click', () => {
-    const muted = Audio.toggleMute();
-    dom.toggleSound.textContent = muted ? '🔇 音OFF' : '🔊 音ON';
-    dom.toggleSound.setAttribute('aria-pressed', muted ? 'true' : 'false');
-  });
-
-  dom.sightRange.addEventListener('input', () => {
-    const value = Number(dom.sightRange.value);
-    ConfigStore.set('viewRadius', value);
-    if (GameState.state.fogActive) {
-      GameState.state.fog.radius = Math.max(
-        3,
-        Math.floor(value - (GameState.state.level - 1) * Config.TRAP.fogRadiusLevelStep)
+    const dpad = document.getElementById("dpad");
+    dpad.querySelectorAll(".pad-btn").forEach((btn) => {
+      btn.addEventListener(
+        "pointerdown",
+        (e) => {
+          e.preventDefault();
+          const action = btn.dataset.action;
+          if (action === "wait") {
+            this.handleAction(Action.WAIT);
+          } else {
+            this.handleMove(action);
+          }
+        },
+        { passive: false }
       );
-    }
-  });
-  dom.padSize.addEventListener('input', () => {
-    ConfigStore.set('padSize', Number(dom.padSize.value));
-    Input.updatePadSize();
-  });
-  dom.swipeSensitivity.addEventListener('input', () => {
-    ConfigStore.set('swipeSensitivity', Number(dom.swipeSensitivity.value));
-  });
-  dom.vibrationToggle.addEventListener('change', () => {
-    ConfigStore.set('vibration', dom.vibrationToggle.checked);
-  });
-  dom.screenshakeToggle.addEventListener('change', () => {
-    ConfigStore.set('screenshake', dom.screenshakeToggle.checked);
-  });
-  dom.fogToggle.addEventListener('change', () => {
-    ConfigStore.set('fog', dom.fogToggle.checked);
-  });
+    });
 
-  dom.pauseButton.addEventListener('click', () => {
-    if (!GameState.state.playing || GameState.state.loading) return;
-    GameState.state.paused = !GameState.state.paused;
-    dom.pauseButton.textContent = GameState.state.paused ? '▶ 再開' : '⏸ ポーズ';
-  });
+    this.initSwipe();
+  }
 
-  dom.resultForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const initials = dom.initialInput.value || '???';
-    const entry = {
-      initials,
-      score: Score.get(),
-      level: GameState.state.level,
-      time: Utils.formatTime(GameState.state.totalTime),
-      date: new Date().toLocaleDateString(),
+  initPadDrag() {
+    const dpad = document.getElementById("dpad");
+    let dragging = false;
+    let offset = { x: 0, y: 0 };
+    let timer = null;
+
+    const start = (e) => {
+      if (e.target.closest(".pad-btn") || e.target.id === "pad-menu") return;
+      timer = setTimeout(() => {
+        dragging = true;
+        const rect = dpad.getBoundingClientRect();
+        offset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        dpad.style.transition = "none";
+      }, Config.padDragDelay);
     };
-    Ranking.add(entry);
-    dom.initialInput.value = '';
-    dom.rankingPanel.classList.remove('hidden');
-    dom.resultForm.classList.add('hidden');
-    renderRanking();
-  });
 
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'p' || e.key === 'P') {
-      if (!GameState.state.playing || GameState.state.loading) return;
-      GameState.state.paused = !GameState.state.paused;
-      dom.pauseButton.textContent = GameState.state.paused ? '▶ 再開' : '⏸ ポーズ';
-    } else if (e.key === 'g' || e.key === 'G') {
-      GameState.state.debug.grid = !GameState.state.debug.grid;
-      Renderer.draw(GameState.state);
-    } else if (e.key === 'v' || e.key === 'V') {
-      GameState.state.debug.fogForce = !GameState.state.debug.fogForce;
-      if (GameState.state.grid.length) {
-        if (GameState.state.debug.fogForce) {
-          GameState.state.visible = FogOfWar.compute(
-            GameState.state.grid,
-            { x: GameState.state.player.tileX, y: GameState.state.player.tileY },
-            GameState.state.fog.radius
-          );
-        } else if (!GameState.state.fogActive || !ConfigStore.get('fog')) {
-          GameState.state.visible = GameState.state.grid.map((row) => row.map(() => true));
+    const move = (e) => {
+      if (!dragging) return;
+      const x = e.clientX - offset.x;
+      const y = e.clientY - offset.y;
+      dpad.style.left = `${x + dpad.offsetWidth / 2}px`;
+      dpad.style.top = `${y}px`;
+      dpad.style.bottom = "auto";
+      dpad.style.transform = "translate(-50%, 0)";
+    };
+
+    const end = () => {
+      clearTimeout(timer);
+      timer = null;
+      dragging = false;
+      dpad.style.transition = "";
+    };
+
+    dpad.addEventListener("pointerdown", start);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
+  initSwipe() {
+    let start = null;
+    document.body.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 1) return;
+        start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      },
+      { passive: true }
+    );
+    document.body.addEventListener(
+      "touchend",
+      (e) => {
+        if (!start) return;
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - start.x;
+        const dy = touch.clientY - start.y;
+        if (Math.abs(dx) < Config.swipeThreshold && Math.abs(dy) < Config.swipeThreshold) {
+          this.handleAction(Action.WAIT);
+        } else if (Math.abs(dx) > Math.abs(dy)) {
+          this.handleMove(dx > 0 ? "right" : "left");
+        } else {
+          this.handleMove(dy > 0 ? "down" : "up");
         }
+        start = null;
+      },
+      { passive: true }
+    );
+  }
+
+  cyclePadState() {
+    const dpad = document.getElementById("dpad");
+    const toggle = document.getElementById("pad-toggle");
+    const order = ["full", "compact", "hidden"];
+    const current = dpad.dataset.size || "full";
+    const idx = order.indexOf(current);
+    const next = order[(idx + 1) % order.length];
+    dpad.dataset.size = next;
+    toggle.dataset.visibility = next;
+    if (next === "hidden") {
+      dpad.style.display = "none";
+    } else {
+      dpad.style.display = "flex";
+    }
+  }
+
+  handleMove(dirKey) {
+    if (this.state !== "running") return;
+    if (this.pendingThrow) {
+      const dir = this.player.effects.reverse > 0 ? this.getReversedDirection(dirKey) : dirKey;
+      this.performThrow(Directions[dir]);
+      return;
+    }
+    if (this.player.effects.snare > 0) {
+      this.pushMessage("罠に拘束されて動けない…");
+      this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
+      this.endPlayerTurn();
+      return;
+    }
+    if (this.player.effects.slow > 0 && !this.playerSlowGate) {
+      this.playerSlowGate = true;
+      this.pushMessage("動きが鈍くて足が重い…");
+      this.endPlayerTurn();
+      return;
+    }
+    if (this.player.effects.slow > 0 && this.playerSlowGate) {
+      this.playerSlowGate = false;
+    }
+
+    let effectiveDir = dirKey;
+    if (this.player.effects.reverse > 0) {
+      if (dirKey === "up") effectiveDir = "down";
+      else if (dirKey === "down") effectiveDir = "up";
+      else if (dirKey === "left") effectiveDir = "right";
+      else if (dirKey === "right") effectiveDir = "left";
+    }
+    const dir = Directions[effectiveDir];
+    if (!dir) return;
+    const nx = this.player.x + dir.x;
+    const ny = this.player.y + dir.y;
+    const tile = this.map[ny]?.[nx];
+    if (!tile || !tile.isWalkable()) {
+      this.pushMessage("壁が行く手を阻む。");
+      return;
+    }
+    const enemy = this.entities.find((e) => e !== this.player && e.x === nx && e.y === ny && e.isAlive());
+    if (enemy) {
+      this.resolveCombat(this.player, enemy);
+      if (!enemy.isAlive()) {
+        this.player.kills++;
+        this.entities = this.entities.filter((e) => e.isAlive());
+        this.gainExp(10 + this.depth * 2);
       }
-      Renderer.draw(GameState.state);
-    } else if (e.key === 'l' || e.key === 'L') {
-      if (GameState.state.playing && !GameState.state.loading) {
-        GameState.state.playing = false;
-        Score.addLevel(GameState.state.level, GameState.state.time);
-        GameState.nextLevel();
+      this.endPlayerTurn();
+      return;
+    }
+    this.player.x = nx;
+    this.player.y = ny;
+    this.handleTileEffects(tile);
+    this.endPlayerTurn();
+  }
+
+  getReversedDirection(dirKey) {
+    if (dirKey === "up") return "down";
+    if (dirKey === "down") return "up";
+    if (dirKey === "left") return "right";
+    if (dirKey === "right") return "left";
+    return dirKey;
+  }
+
+  handleAction(action) {
+    if (this.state !== "running") return;
+    if (action === Action.WAIT) {
+      if (this.player.effects.snare > 0) {
+        this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
+      }
+      this.pushMessage("私は身構えて様子を伺った。");
+      this.endPlayerTurn();
+    }
+  }
+
+  handleTileEffects(tile) {
+    if (tile.terrain === Terrain.STAIRS) {
+      this.nextFloor();
+      return;
+    }
+    if (tile.trap && tile.trap.armed) {
+      tile.trap.armed = false;
+      switch (tile.trap.type) {
+        case TrapType.SLOW:
+          this.player.effects.slow = 5;
+          this.playerSlowGate = false;
+          this.pushMessage("スロウ罠！動きが鈍くなった。");
+          break;
+        case TrapType.SNARE:
+          this.player.effects.snare = 1;
+          this.pushMessage("スネア罠！身動きが取れない。");
+          break;
+        case TrapType.REVERSE:
+          this.player.effects.reverse = 6;
+          this.pushMessage("逆操作罠！感覚が狂う。");
+          break;
+        case TrapType.FOG:
+          this.player.effects.fog = 10;
+          this.pushMessage("フォグ罠！視界が狭まった。");
+          break;
+        case TrapType.NOISE:
+          this.pushMessage("ノイズ罠！敵が集まってくる気配。");
+          this.alertEnemies();
+          break;
       }
     }
-  });
+  }
 
-  setInterval(updateHUD, 200);
-})();
+  alertEnemies() {
+    for (const enemy of this.entities) {
+      if (enemy === this.player) continue;
+      enemy.aware = true;
+    }
+  }
+
+  endPlayerTurn() {
+    this.turn++;
+    this.player.hunger = Math.max(0, this.player.hunger - Config.hungerPerTurn);
+    if (this.player.hunger === 0) {
+      this.player.hp = Math.max(0, this.player.hp - Config.hungerDamage);
+      this.pushMessage("空腹でダメージを受けた…");
+      if (this.player.hp <= 0) {
+        this.gameOver("飢えて倒れてしまった…");
+        return;
+      }
+    }
+    if (this.player.effects.reverse > 0) this.player.effects.reverse--;
+    if (this.player.effects.fog > 0) this.player.effects.fog--;
+    if (this.player.effects.slow > 0) this.player.effects.slow--;
+    if (this.player.effects.snare > 0) this.player.effects.snare--;
+    this.processItemsOnTile();
+    this.updateHUD();
+    this.processEnemies();
+    this.draw();
+  }
+
+  processItemsOnTile() {
+    const tile = this.map[this.player.y][this.player.x];
+    if (tile.item) {
+      if (this.inventoryCount() >= Config.maxInventory) {
+        this.pushMessage("荷物がいっぱいだ。");
+        return;
+      }
+      const item = tile.item;
+      tile.item = null;
+      this.player.inventory.push(item);
+      this.pushMessage(`${item.label} を拾った。`);
+      this.showToast(`${item.label} 入手`);
+      this.updateHUD();
+    }
+  }
+
+  processEnemies() {
+    for (const enemy of this.entities) {
+      if (enemy === this.player) continue;
+      if (!enemy.isAlive()) continue;
+      if (enemy.status.sleep > 0) {
+        enemy.status.sleep--;
+        continue;
+      }
+      if (enemy.status.snare > 0) {
+        enemy.status.snare--;
+        continue;
+      }
+      enemy.energy += enemy.speed;
+      while (enemy.energy >= 100) {
+        enemy.energy -= 100;
+        this.enemyAct(enemy);
+        if (!this.player.isAlive()) return;
+      }
+    }
+  }
+
+  enemyAct(enemy) {
+    if (!enemy.aware) {
+      const dist = Math.abs(enemy.x - this.player.x) + Math.abs(enemy.y - this.player.y);
+      if (dist <= 6 || enemy.grace <= 0) {
+        enemy.aware = true;
+      } else {
+        enemy.grace--;
+      }
+    }
+    if (!enemy.aware) {
+      this.wander(enemy);
+      return;
+    }
+    const dx = this.player.x - enemy.x;
+    const dy = this.player.y - enemy.y;
+    if (Math.abs(dx) + Math.abs(dy) === 1) {
+      this.resolveCombat(enemy, this.player);
+      if (!this.player.isAlive()) {
+        this.gameOver("敵に倒されてしまった…");
+      }
+      return;
+    }
+    let path = null;
+    if (enemy.type === EnemyType.STRATEGIST) {
+      path = this.findPath(enemy, this.player);
+    } else if (enemy.type === EnemyType.SPRINTER && Math.random() < 0.5) {
+      path = this.findPath(enemy, this.player);
+    }
+    if (path && path.length > 1) {
+      enemy.x = path[1].x;
+      enemy.y = path[1].y;
+    } else {
+      this.chaseOrWander(enemy);
+    }
+  }
+
+  findPath(startEntity, targetEntity) {
+    const start = { x: startEntity.x, y: startEntity.y };
+    const goal = { x: targetEntity.x, y: targetEntity.y };
+    const frontier = [start];
+    const visited = new Set([key(start.x, start.y)]);
+    const parent = new Map();
+    while (frontier.length) {
+      const current = frontier.shift();
+      if (current.x === goal.x && current.y === goal.y) {
+        const path = [];
+        let node = key(goal.x, goal.y);
+        while (node) {
+          const [nx, ny] = node.split(",").map(Number);
+          path.unshift({ x: nx, y: ny });
+          node = parent.get(node) || null;
+        }
+        return path;
+      }
+      for (const dir of Object.values(Directions)) {
+        const nx = current.x + dir.x;
+        const ny = current.y + dir.y;
+        const tile = this.map[ny]?.[nx];
+        if (!tile || !tile.isWalkable()) continue;
+        if (this.entities.some((e) => e !== startEntity && e !== this.player && e.x === nx && e.y === ny && e.isAlive())) continue;
+        const k = key(nx, ny);
+        if (visited.has(k)) continue;
+        visited.add(k);
+        parent.set(k, key(current.x, current.y));
+        frontier.push({ x: nx, y: ny });
+      }
+    }
+    return null;
+  }
+
+  wander(enemy) {
+    for (const dir of shuffle(Object.values(Directions))) {
+      const nx = enemy.x + dir.x;
+      const ny = enemy.y + dir.y;
+      const tile = this.map[ny]?.[nx];
+      if (!tile || !tile.isWalkable()) continue;
+      if (this.entities.some((e) => e !== enemy && e.x === nx && e.y === ny && e.isAlive())) continue;
+      enemy.x = nx;
+      enemy.y = ny;
+      break;
+    }
+  }
+
+  chaseOrWander(enemy) {
+    const dx = this.player.x - enemy.x;
+    const dy = this.player.y - enemy.y;
+    const dirs = [];
+    if (Math.abs(dx) > Math.abs(dy)) {
+      dirs.push(dx > 0 ? Directions.right : Directions.left);
+      dirs.push(dy > 0 ? Directions.down : Directions.up);
+    } else {
+      dirs.push(dy > 0 ? Directions.down : Directions.up);
+      dirs.push(dx > 0 ? Directions.right : Directions.left);
+    }
+    dirs.push(...shuffle(Object.values(Directions)));
+    for (const dir of dirs) {
+      const nx = enemy.x + dir.x;
+      const ny = enemy.y + dir.y;
+      const tile = this.map[ny]?.[nx];
+      if (!tile || !tile.isWalkable()) continue;
+      if (this.entities.some((e) => e !== enemy && e.x === nx && e.y === ny && e.isAlive())) continue;
+      enemy.x = nx;
+      enemy.y = ny;
+      break;
+    }
+  }
+
+  resolveCombat(attacker, defender) {
+    const attack = attacker.attack + randInt(0, 2);
+    const defense = defender.defense + randInt(0, 2);
+    const damage = Math.max(1, attack - defense);
+    defender.hp = Math.max(0, defender.hp - damage);
+    const attackerName = attacker === this.player ? "私" : "敵";
+    const defenderName = defender === this.player ? "私" : "敵";
+    this.pushMessage(`${attackerName}は${defenderName}に${damage}のダメージ！`);
+    if (defender.hp <= 0) {
+      this.pushMessage(`${defenderName}を倒した！`);
+      if (defender === this.player) {
+        this.gameOver("力尽きた…");
+      }
+    }
+  }
+
+  gainExp(amount) {
+    this.player.exp += amount;
+    const next = Config.xpTable[this.player.level] || (this.player.level * 90 + 200);
+    if (this.player.exp >= next) {
+      this.player.level++;
+      this.player.maxHp += 5;
+      this.player.baseAttack += 2;
+      this.player.baseDefense += 1;
+      this.recalculateStats();
+      this.player.hp = this.player.maxHp;
+      this.pushMessage(`レベル${this.player.level}に上がった！`);
+    }
+  }
+
+  inventoryCount() {
+    return this.player.inventory.length;
+  }
+
+  openInventory() {
+    const overlay = document.getElementById("menu-overlay");
+    const list = document.getElementById("inventory-list");
+    list.innerHTML = "";
+    if (!this.player.inventory.length) {
+      const li = document.createElement("li");
+      li.textContent = "何も持っていない";
+      list.appendChild(li);
+    } else {
+      for (const item of this.player.inventory) {
+        const li = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = item.label;
+        li.appendChild(label);
+        const actions = document.createElement("div");
+        if (item.type === ItemType.SWORD || item.type === ItemType.SHIELD) {
+          const btn = document.createElement("button");
+          btn.textContent = "装備";
+          btn.addEventListener("click", () => {
+            this.equipItem(item);
+            this.openInventory();
+          });
+          actions.appendChild(btn);
+        } else {
+          const btn = document.createElement("button");
+          btn.textContent = "使用";
+          btn.addEventListener("click", () => {
+            this.useItem(item);
+            if (!this.pendingThrow) this.openInventory();
+          });
+          actions.appendChild(btn);
+        }
+        const drop = document.createElement("button");
+        drop.textContent = "捨てる";
+        drop.addEventListener("click", () => {
+          this.dropItem(item);
+          this.openInventory();
+        });
+        actions.appendChild(drop);
+        li.appendChild(actions);
+        list.appendChild(li);
+      }
+    }
+    overlay.classList.remove("hidden");
+  }
+
+  closeInventory() {
+    document.getElementById("menu-overlay").classList.add("hidden");
+  }
+
+  equipItem(item) {
+    if (item.type === ItemType.SWORD) {
+      this.player.equipment.sword = item;
+    } else if (item.type === ItemType.SHIELD) {
+      this.player.equipment.shield = item;
+    }
+    this.recalculateStats();
+    this.pushMessage(`${item.label} を装備した。`);
+    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+    this.updateHUD();
+  }
+
+  dropItem(item) {
+    const tile = this.map[this.player.y][this.player.x];
+    if (tile.item) {
+      this.pushMessage("ここには置けない。");
+      return;
+    }
+    tile.item = item;
+    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+    this.pushMessage(`${item.label} を置いた。`);
+    this.updateHUD();
+  }
+
+  recalculateStats() {
+    let attack = this.player.baseAttack;
+    let defense = this.player.baseDefense;
+    if (this.player.equipment.sword) attack += this.player.equipment.sword.bonus;
+    if (this.player.equipment.shield) defense += this.player.equipment.shield.bonus;
+    this.player.attack = attack;
+    this.player.defense = defense;
+  }
+
+  useItem(item) {
+    switch (item.type) {
+      case ItemType.HERB: {
+        const heal = 18;
+        this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
+        this.pushMessage(`草を使ってHPを${heal}回復した。`);
+        break;
+      }
+      case ItemType.SCROLL:
+        this.castScroll();
+        break;
+      case ItemType.BREAD:
+        this.player.hunger = clamp(this.player.hunger + 60, 0, 120);
+        this.pushMessage("パンを食べて満腹になった！");
+        break;
+      case ItemType.STONE:
+        this.pendingThrow = item;
+        this.pushMessage("投げたい方向を選ぼう。" );
+        this.showToast("方向入力で投擲");
+        return;
+      default:
+        break;
+    }
+    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+    this.closeInventory();
+    this.endPlayerTurn();
+  }
+
+  performThrow(direction) {
+    const item = this.pendingThrow;
+    this.pendingThrow = null;
+    if (!direction) return;
+    let x = this.player.x;
+    let y = this.player.y;
+    let hit = false;
+    while (true) {
+      x += direction.x;
+      y += direction.y;
+      const tile = this.map[y]?.[x];
+      if (!tile || !tile.isWalkable()) {
+        break;
+      }
+      const enemy = this.entities.find((e) => e !== this.player && e.x === x && e.y === y && e.isAlive());
+      if (enemy) {
+        const damage = 8 + this.depth * 2;
+        enemy.hp = Math.max(0, enemy.hp - damage);
+        this.pushMessage(`石が敵に命中し${damage}ダメージ！`);
+        if (!enemy.isAlive()) {
+          this.player.kills++;
+          this.gainExp(10 + this.depth * 2);
+          this.entities = this.entities.filter((e) => e.isAlive());
+        }
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) this.pushMessage("石は床に落ちた。");
+    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+    this.closeInventory();
+    this.endPlayerTurn();
+  }
+
+  castScroll() {
+    const roll = Math.random();
+    if (roll < 0.4) {
+      this.pushMessage("目くらましの巻物！敵が混乱した。");
+      for (const enemy of this.entities) {
+        if (enemy === this.player) continue;
+        enemy.status.blind = 3;
+      }
+    } else if (roll < 0.75) {
+      this.pushMessage("眠りの巻物！周囲の敵が眠った。");
+      for (const enemy of this.entities) {
+        if (enemy === this.player) continue;
+        const dist = Math.abs(enemy.x - this.player.x) + Math.abs(enemy.y - this.player.y);
+        if (dist <= 6) enemy.status.sleep = 4;
+      }
+    } else {
+      this.pushMessage("場所替えの巻物！");
+      const candidates = this.entities.filter((e) => e !== this.player && e.isAlive());
+      if (candidates.length) {
+        const enemy = randChoice(candidates);
+        const px = this.player.x;
+        const py = this.player.y;
+        this.player.x = enemy.x;
+        this.player.y = enemy.y;
+        enemy.x = px;
+        enemy.y = py;
+      }
+    }
+  }
+
+  updateHUD() {
+    document.getElementById("ui-floor").textContent = `${this.depth}F`;
+    document.getElementById("ui-hp").textContent = `${this.player.hp} / ${this.player.maxHp}`;
+    document.getElementById("ui-level").textContent = this.player.level;
+    document.getElementById("ui-exp").textContent = this.player.exp;
+    document.getElementById("ui-hunger").textContent = `${this.player.hunger}%`;
+    document.getElementById("ui-atk").textContent = this.player.attack;
+    document.getElementById("ui-def").textContent = this.player.defense;
+    document.getElementById("ui-inventory").textContent = `${this.inventoryCount()} / ${Config.maxInventory}`;
+  }
+
+  pushMessage(message) {
+    this.logMessages.push(message);
+    if (this.logMessages.length > 8) this.logMessages.shift();
+    this.messageLog.innerHTML = this.logMessages.map((m) => `<p>${m}</p>`).join("");
+  }
+
+  showToast(text) {
+    this.toast.textContent = text;
+    this.toast.classList.add("show");
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toast.classList.remove("show");
+    }, 1800);
+  }
+
+  draw() {
+    if (!this.map) return;
+    const ctx = this.ctx;
+    const width = this.canvas.width / window.devicePixelRatio;
+    const height = this.canvas.height / window.devicePixelRatio;
+    ctx.clearRect(0, 0, width, height);
+    const tileSize = Config.tileSize;
+    const offsetX = (width - this.map[0].length * tileSize) / 2;
+    const offsetY = (height - this.map.length * tileSize) / 2;
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    for (let y = 0; y < this.map.length; y++) {
+      for (let x = 0; x < this.map[0].length; x++) {
+        const tile = this.map[y][x];
+        let visible = true;
+        if (this.player?.effects.fog > 0) {
+          const dx = x - this.player.x;
+          const dy = y - this.player.y;
+          visible = dx * dx + dy * dy <= Config.fogRadius * Config.fogRadius;
+        }
+        this.drawTile(ctx, tile, x, y, tileSize, visible);
+      }
+    }
+    for (const entity of this.entities) {
+      if (!entity.isAlive()) continue;
+      let visible = true;
+      if (this.player?.effects.fog > 0) {
+        const dx = entity.x - this.player.x;
+        const dy = entity.y - this.player.y;
+        visible = dx * dx + dy * dy <= Config.fogRadius * Config.fogRadius;
+      }
+      if (!visible) continue;
+      const px = entity.x * tileSize;
+      const py = entity.y * tileSize;
+      ctx.fillStyle = entity === this.player ? "#ffeb3b" : "#ff6b6b";
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 2;
+      ctx.font = `${tileSize - 6}px 'Noto Sans JP', sans-serif`;
+      ctx.textBaseline = "top";
+      const symbol = entity === this.player ? "私" : "敵";
+      ctx.strokeText(symbol, px + 4, py + 2);
+      ctx.fillText(symbol, px + 4, py + 2);
+    }
+    ctx.restore();
+  }
+
+  drawTile(ctx, tile, x, y, size, visible) {
+    const px = x * size;
+    const py = y * size;
+    if (!visible) {
+      ctx.fillStyle = "rgba(5,6,12,0.85)";
+      ctx.fillRect(px, py, size, size);
+      return;
+    }
+    let color = "#0b111a";
+    if (tile.terrain === Terrain.ROOM) color = "#1e2b43";
+    else if (tile.terrain === Terrain.FLOOR) color = "#1a2436";
+    else if (tile.terrain === Terrain.WATER || tile.decoration === Terrain.WATER) color = "#0d3a63";
+    else if (tile.decoration === Terrain.GRASS) color = "#1f3d28";
+    else if (tile.decoration === Terrain.ROCK) color = "#35393c";
+    else if (tile.terrain === Terrain.STAIRS) color = "#38446c";
+    ctx.fillStyle = color;
+    ctx.fillRect(px, py, size, size);
+    if (tile.terrain === Terrain.STAIRS) {
+      ctx.strokeStyle = "#ffd166";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px + 4, py + 4, size - 8, size - 8);
+      ctx.fillStyle = "#ffe08a";
+      ctx.font = `${size - 12}px 'Noto Sans JP', sans-serif`;
+      ctx.fillText("階", px + 6, py + 6);
+    }
+    if (tile.trap && tile.trap.armed) {
+      ctx.strokeStyle = "#ff8a65";
+      ctx.strokeRect(px + 6, py + 6, size - 12, size - 12);
+      ctx.fillStyle = "#ffccbc";
+      ctx.font = `${size - 14}px 'Noto Sans JP', sans-serif`;
+      ctx.fillText("罠", px + 8, py + 6);
+    }
+    if (tile.item) {
+      ctx.strokeStyle = "#f8f8f8";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(px + 8, py + 8, size - 16, size - 16);
+      ctx.fillStyle = "#e1f5fe";
+      ctx.font = `${size - 12}px 'Noto Sans JP', sans-serif`;
+      let symbol = "?";
+      switch (tile.item.type) {
+        case ItemType.SWORD:
+          symbol = "剣";
+          break;
+        case ItemType.SHIELD:
+          symbol = "盾";
+          break;
+        case ItemType.HERB:
+          symbol = "草";
+          break;
+        case ItemType.SCROLL:
+          symbol = "巻";
+          break;
+        case ItemType.BREAD:
+          symbol = "食";
+          break;
+        case ItemType.STONE:
+          symbol = "石";
+          break;
+      }
+      ctx.fillText(symbol, px + 8, py + 8);
+    }
+    if (this.debugGrid) {
+      ctx.strokeStyle = "rgba(255,255,255,0.05)";
+      ctx.strokeRect(px, py, size, size);
+    }
+  }
+
+  nextFloor() {
+    this.depth++;
+    this.playerSlowGate = false;
+    this.pushMessage(`${this.depth}Fへ降りた。敵が強くなっている…`);
+    this.generateFloor();
+    this.updateHUD();
+    this.draw();
+  }
+
+  gameOver(reason) {
+    this.state = "result";
+    document.getElementById("result-floor").textContent = `${this.depth}F`;
+    document.getElementById("result-kills").textContent = this.player.kills;
+    const score = this.depth * 100 + this.player.kills * 10 - this.turn;
+    document.getElementById("result-score").textContent = Math.max(0, score);
+    document.getElementById("result-overlay").classList.remove("hidden");
+    this.pushMessage(reason);
+  }
+
+  saveRanking(name) {
+    const score = parseInt(document.getElementById("result-score").textContent, 10) || 0;
+    const entry = {
+      name,
+      score,
+      floor: this.depth,
+      kills: this.player.kills,
+      time: new Date().toISOString(),
+    };
+    const ranking = JSON.parse(localStorage.getItem("rogueRanking") || "[]");
+    ranking.push(entry);
+    ranking.sort((a, b) => b.score - a.score);
+    localStorage.setItem("rogueRanking", JSON.stringify(ranking.slice(0, 10)));
+  }
+
+  updateRankingList() {
+    const ranking = JSON.parse(localStorage.getItem("rogueRanking") || "[]");
+    const list = document.getElementById("ranking-list");
+    list.innerHTML = "";
+    ranking.forEach((entry) => {
+      const li = document.createElement("li");
+      li.textContent = `${entry.name} - ${entry.score}点 (深さ${entry.floor}F / 撃破${entry.kills})`;
+      list.appendChild(li);
+    });
+    if (!ranking.length) {
+      const li = document.createElement("li");
+      li.textContent = "記録はまだありません";
+      list.appendChild(li);
+    }
+  }
+
+  showRanking() {
+    this.updateRankingList();
+    document.getElementById("ranking-overlay").classList.remove("hidden");
+  }
+}
+
+const game = new Game();
+
+window.game = game;
+
+document.getElementById("menu-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "menu-overlay") {
+    document.getElementById("menu-overlay").classList.add("hidden");
+  }
+});
+
+document.getElementById("ranking-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "ranking-overlay") {
+    document.getElementById("ranking-overlay").classList.add("hidden");
+  }
+});
