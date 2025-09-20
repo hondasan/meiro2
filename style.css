@@ -221,13 +221,65 @@ body:not(.dock-active) #pad-dock {
   position: relative;
   width: min(100%, 720px);
   min-height: var(--pad-h);
-  padding: 16px 24px 20px;
+  padding: 72px 24px 20px;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 24px;
   pointer-events: auto;
   transition: opacity 200ms ease, transform 200ms ease;
+}
+
+#quickslot-bar {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  padding: 0 12px;
+  pointer-events: auto;
+}
+
+.quickslot {
+  min-width: 72px;
+  height: 64px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.quickslot.empty {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.quickslot.drag-over {
+  border-color: var(--accent);
+  background: rgba(37, 99, 235, 0.35);
+}
+
+.quickslot-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.quickslot-label {
+  font-size: 0.65rem;
+  line-height: 1.1;
+  max-width: 70px;
+  text-align: center;
 }
 
 #pad-dock[aria-expanded="false"] {
@@ -600,5 +652,14 @@ button.danger {
 
   .radial-slot {
     width: 104px;
+  }
+
+  #quickslot-bar {
+    gap: 8px;
+  }
+
+  .quickslot {
+    min-width: 60px;
+    height: 56px;
   }
 }

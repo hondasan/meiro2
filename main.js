@@ -50,6 +50,20 @@ const Config = {
   autoMoveDelay: 150,
   xpTable: [0, 25, 55, 95, 145, 205, 275, 360, 450, 560],
   ui: JSON.parse(JSON.stringify(defaultUISettings)),
+  camera: {
+    deadzone: 2,
+    lerp: 0.18,
+  },
+  balance: {
+    minorHungerFactor: 0.25,
+    earlyGraceTurns: 2,
+  },
+};
+
+const ActionCost = {
+  FREE: "free",
+  MINOR: "minor",
+  MAJOR: "major",
 };
 
 const MAP_SIZE_OPTIONS = [
@@ -86,7 +100,7 @@ const TrapType = {
 };
 
 const ItemType = {
-  SWORD: "sword",
+  WEAPON: "weapon",
   SHIELD: "shield",
   HERB: "herb",
   SCROLL: "scroll",
@@ -94,11 +108,170 @@ const ItemType = {
   STONE: "stone",
 };
 
+const WeaponType = {
+  DAGGER: "dagger",
+  SWORD: "sword",
+  GREATSWORD: "greatsword",
+  SPEAR: "spear",
+  BOW: "bow",
+  CROSSBOW: "crossbow",
+};
+
+const WeaponRarity = ["N", "U", "R", "SR", "SSR"];
+
+const WeaponEffects = {
+  BLEED: { id: "bleed", label: "出血" },
+  STUN: { id: "stun", label: "スタン" },
+  PIERCE: { id: "pierce", label: "貫通" },
+  REFLECT: { id: "reflect", label: "反射" },
+};
+
+const WeaponCatalog = {
+  [WeaponType.DAGGER]: {
+    label: "短剣",
+    baseAttack: 4,
+    tags: { firstStrike: true, attackMod: -1 },
+  },
+  [WeaponType.SWORD]: {
+    label: "片手剣",
+    baseAttack: 6,
+    tags: {},
+  },
+  [WeaponType.GREATSWORD]: {
+    label: "大剣",
+    baseAttack: 8,
+    tags: { heavy: true },
+  },
+  [WeaponType.SPEAR]: {
+    label: "槍",
+    baseAttack: 6,
+    reach: 2,
+    tags: { reach: true },
+  },
+  [WeaponType.BOW]: {
+    label: "弓",
+    baseAttack: 5,
+    range: 3,
+    tags: { ranged: true, reload: true },
+  },
+  [WeaponType.CROSSBOW]: {
+    label: "クロスボウ",
+    baseAttack: 6,
+    range: 3,
+    tags: { ranged: true, reload: true, heavy: true },
+  },
+};
+
+const Factions = {
+  BEAST: "beast",
+  DEMON: "demon",
+  THIEF: "thief",
+  SPIRIT: "spirit",
+  MACHINE: "machine",
+};
+
+const FactionConfig = {
+  [Factions.BEAST]: {
+    label: "獣",
+    color: "#fb923c",
+    accent: "#f97316",
+    grace: Config.graceTurns,
+    trapWeak: true,
+  },
+  [Factions.DEMON]: {
+    label: "悪",
+    color: "#dc2626",
+    accent: "#ef4444",
+    relentless: true,
+  },
+  [Factions.THIEF]: {
+    label: "盗",
+    color: "#a855f7",
+    accent: "#c084fc",
+    stealChance: 0.45,
+  },
+  [Factions.SPIRIT]: {
+    label: "霊",
+    color: "#60a5fa",
+    accent: "#bae6fd",
+    phaseChance: 0.05,
+  },
+  [Factions.MACHINE]: {
+    label: "機",
+    color: "#22d3ee",
+    accent: "#67e8f9",
+    bleedImmune: true,
+  },
+};
+
 const EnemyType = {
   SPRINTER: "sprinter",
   STRATEGIST: "strategist",
   WANDERER: "wanderer",
+  PATROLLER: "patroller",
+  AMBUSHER: "ambusher",
 };
+
+const EnemyTypeConfig = {
+  [EnemyType.SPRINTER]: { speed: 130, vision: 4 },
+  [EnemyType.STRATEGIST]: { speed: 100, vision: 7 },
+  [EnemyType.WANDERER]: { speed: 90, vision: 6 },
+  [EnemyType.PATROLLER]: { speed: 95, vision: 6 },
+  [EnemyType.AMBUSHER]: { speed: 100, vision: 6 },
+};
+
+Config.factions = FactionConfig;
+Config.types = EnemyTypeConfig;
+Config.spawnMixByFloor = [
+  {
+    floors: [1, 3],
+    factions: {
+      [Factions.BEAST]: 0.7,
+      [Factions.THIEF]: 0.12,
+      [Factions.DEMON]: 0.08,
+      [Factions.MACHINE]: 0.05,
+    },
+    types: {
+      [EnemyType.WANDERER]: 0.55,
+      [EnemyType.SPRINTER]: 0.35,
+      [EnemyType.STRATEGIST]: 0.1,
+    },
+  },
+  {
+    floors: [4, 7],
+    factions: {
+      [Factions.BEAST]: 0.45,
+      [Factions.THIEF]: 0.28,
+      [Factions.SPIRIT]: 0.15,
+      [Factions.DEMON]: 0.08,
+      [Factions.MACHINE]: 0.04,
+    },
+    types: {
+      [EnemyType.WANDERER]: 0.4,
+      [EnemyType.SPRINTER]: 0.25,
+      [EnemyType.STRATEGIST]: 0.2,
+      [EnemyType.PATROLLER]: 0.1,
+      [EnemyType.AMBUSHER]: 0.05,
+    },
+  },
+  {
+    floors: [8, 99],
+    factions: {
+      [Factions.DEMON]: 0.3,
+      [Factions.MACHINE]: 0.25,
+      [Factions.BEAST]: 0.2,
+      [Factions.THIEF]: 0.15,
+      [Factions.SPIRIT]: 0.1,
+    },
+    types: {
+      [EnemyType.STRATEGIST]: 0.3,
+      [EnemyType.PATROLLER]: 0.25,
+      [EnemyType.AMBUSHER]: 0.2,
+      [EnemyType.SPRINTER]: 0.15,
+      [EnemyType.WANDERER]: 0.1,
+    },
+  },
+];
 
 const Directions = {
   up: { x: 0, y: -1 },
@@ -173,6 +346,8 @@ class MobileUI {
     this.radialSlotsContainer = this.radial.querySelector(".radial-slots");
     this.radialCancel = document.getElementById("radial-cancel");
     this.radialCore = this.radial.querySelector(".radial-core");
+    this.quickslotBar = document.getElementById("quickslot-bar");
+    this.quickslotButtons = Array.from(document.querySelectorAll(".quickslot"));
     this.padPointer = null;
     this.padCurrentBtn = null;
     this.padRepeatTimer = null;
@@ -196,6 +371,7 @@ class MobileUI {
     this.setupTouchInput();
     this.setupDockHandle();
     this.setupSettingsPanel();
+    this.setupQuickslots();
     this.observeViewport();
     this.layout();
   }
@@ -858,6 +1034,66 @@ class MobileUI {
     overlay.classList.remove("hidden");
   }
 
+  setupQuickslots() {
+    if (!this.quickslotButtons?.length) return;
+    this.quickslotButtons.forEach((btn, index) => {
+      let clearTimer = null;
+      btn.addEventListener("click", () => {
+        this.onUserInteract({ expand: false });
+        this.game.useQuickSlot(index);
+      });
+      btn.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        btn.classList.add("drag-over");
+      });
+      btn.addEventListener("dragleave", () => btn.classList.remove("drag-over"));
+      btn.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        btn.classList.remove("drag-over");
+        const id = ev.dataTransfer?.getData("text/plain");
+        if (id) {
+          this.game.assignQuickslot(index, id);
+        }
+      });
+      btn.addEventListener("pointerdown", () => {
+        clearTimer = setTimeout(() => {
+          this.game.clearQuickslot(index);
+        }, 600);
+      });
+      const cancelClear = () => {
+        if (clearTimer) {
+          clearTimeout(clearTimer);
+          clearTimer = null;
+        }
+      };
+      btn.addEventListener("pointerup", cancelClear);
+      btn.addEventListener("pointerleave", cancelClear);
+      btn.addEventListener("pointercancel", cancelClear);
+    });
+    this.renderQuickslots(this.game.getQuickslotState());
+  }
+
+  renderQuickslots(slots = []) {
+    if (!this.quickslotButtons?.length) return;
+    slots.forEach((slot, index) => {
+      const btn = this.quickslotButtons[index];
+      if (!btn) return;
+      const iconEl = btn.querySelector(".quickslot-icon");
+      const labelEl = btn.querySelector(".quickslot-label");
+      if (slot?.empty || !slot) {
+        btn.classList.add("empty");
+        if (iconEl) iconEl.textContent = "+";
+        if (labelEl) labelEl.textContent = "";
+        btn.setAttribute("aria-label", `クイックスロット${index + 1} 空`);
+      } else {
+        btn.classList.remove("empty");
+        if (iconEl) iconEl.textContent = slot.icon || "◎";
+        if (labelEl) labelEl.textContent = slot.label || "";
+        btn.setAttribute("aria-label", `クイックスロット${index + 1} ${slot.label}`);
+      }
+    });
+  }
+
   toggleMinimap() {
     const toggle = document.getElementById("minimap-toggle");
     const expanded = toggle.getAttribute("aria-expanded") === "true";
@@ -1041,6 +1277,124 @@ function shuffle(array) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+function weightedChoice(weights) {
+  const entries = Object.entries(weights).filter(([, value]) => value > 0);
+  if (!entries.length) return null;
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+  let r = Math.random() * total;
+  for (const [key, value] of entries) {
+    r -= value;
+    if (r <= 0) return key;
+  }
+  return entries[entries.length - 1][0];
+}
+
+const WeaponRarityBonus = {
+  N: 0,
+  U: 1,
+  R: 2,
+  SR: 3,
+  SSR: 4,
+};
+
+const WeaponEffectChance = {
+  N: 0,
+  U: 0.05,
+  R: 0.12,
+  SR: 0.25,
+  SSR: 0.35,
+};
+
+const WeaponTypeWeights = {
+  [WeaponType.DAGGER]: 0.18,
+  [WeaponType.SWORD]: 0.32,
+  [WeaponType.GREATSWORD]: 0.16,
+  [WeaponType.SPEAR]: 0.14,
+  [WeaponType.BOW]: 0.12,
+  [WeaponType.CROSSBOW]: 0.08,
+};
+
+function rollWeaponRarity(depth) {
+  const base = { N: 0.5, U: 0.24, R: 0.14, SR: 0.1, SSR: 0.02 };
+  if (depth <= 3) {
+    const ssr = 0.01 + Math.random() * 0.02;
+    const delta = base.SSR - ssr;
+    base.SSR = ssr;
+    base.N += delta;
+  } else if (depth >= 6) {
+    base.SR += 0.03;
+    base.SSR += 0.02;
+    base.N -= 0.025;
+    base.U -= 0.015;
+  }
+  return weightedChoice(base) || "N";
+}
+
+function rollWeaponType(depth) {
+  const weights = { ...WeaponTypeWeights };
+  if (depth >= 5) {
+    weights[WeaponType.CROSSBOW] += 0.04;
+    weights[WeaponType.GREATSWORD] += 0.02;
+    weights[WeaponType.DAGGER] -= 0.02;
+  }
+  if (depth <= 3) {
+    weights[WeaponType.GREATSWORD] *= 0.7;
+    weights[WeaponType.CROSSBOW] *= 0.6;
+  }
+  return weightedChoice(weights) || WeaponType.SWORD;
+}
+
+function rollWeaponEffect(rarity, factionId) {
+  const chance = WeaponEffectChance[rarity] || 0;
+  if (Math.random() > chance) return null;
+  const options = [WeaponEffects.BLEED, WeaponEffects.STUN, WeaponEffects.PIERCE, WeaponEffects.REFLECT];
+  if (factionId === Factions.MACHINE) {
+    return randChoice(options.filter((e) => e !== WeaponEffects.BLEED)) || null;
+  }
+  return randChoice(options);
+}
+
+function createWeapon(depth, factionId) {
+  const rarity = rollWeaponRarity(depth);
+  const weaponType = rollWeaponType(depth);
+  const base = WeaponCatalog[weaponType];
+  const bonus = WeaponRarityBonus[rarity] || 0;
+  const depthBonus = Math.floor((depth - 1) / 3);
+  const attack = base.baseAttack + bonus + depthBonus;
+  const effect = rollWeaponEffect(rarity, factionId);
+  const tags = { ...(base.tags || {}) };
+  if (effect && effect.id === WeaponEffects.REFLECT.id) {
+    tags.reflect = true;
+  }
+  return new Item(ItemType.WEAPON, {
+    weaponType,
+    weaponLabel: base.label,
+    rarity,
+    attack,
+    reach: base.reach || 1,
+    range: base.range || 1,
+    tags,
+    effect: effect || null,
+  });
+}
+
+function getSpawnMix(depth) {
+  return (
+    Config.spawnMixByFloor.find((entry) => depth >= entry.floors[0] && depth <= entry.floors[1]) ||
+    Config.spawnMixByFloor[Config.spawnMixByFloor.length - 1]
+  );
+}
+
+function pickFaction(depth) {
+  const mix = getSpawnMix(depth);
+  return weightedChoice(mix.factions) || Factions.BEAST;
+}
+
+function pickEnemyType(depth) {
+  const mix = getSpawnMix(depth);
+  return weightedChoice(mix.types) || EnemyType.WANDERER;
 }
 
 function clamp(v, min, max) {
@@ -1417,6 +1771,8 @@ class Entity {
       snare: 0,
       blind: 0,
       sleep: 0,
+      bleed: 0,
+      stun: 0,
     };
   }
 
@@ -1446,39 +1802,64 @@ class Player extends Entity {
     };
     this.inventory = [];
     this.equipment = {
-      sword: null,
+      weapon: null,
       shield: null,
     };
     this.kills = 0;
+    this.rangedLoaded = false;
   }
 }
 
 class Enemy extends Entity {
-  constructor(x, y, type, depth) {
+  constructor(x, y, options = {}) {
     super(x, y);
-    this.type = type;
-    const baseAttack = 6 + depth * 2;
-    if (type === EnemyType.SPRINTER) {
-      this.maxHp = 12 + depth * 2;
-      this.attack = baseAttack;
-      this.defense = 2 + depth;
-      this.speed = 130;
-    } else if (type === EnemyType.STRATEGIST) {
-      this.maxHp = 18 + depth * 2;
-      this.attack = baseAttack + 2;
-      this.defense = 3 + depth;
-      this.speed = 100;
-    } else {
-      this.maxHp = 16 + depth * 2;
-      this.attack = baseAttack - 1;
-      this.defense = 2 + depth;
-      this.speed = 90;
+    this.type = options.type || EnemyType.WANDERER;
+    this.depth = options.depth || 1;
+    this.faction = options.faction || Factions.BEAST;
+    const typeConfig = EnemyTypeConfig[this.type] || EnemyTypeConfig[EnemyType.WANDERER];
+    const factionConfig = FactionConfig[this.faction] || FactionConfig[Factions.BEAST];
+    const baseAttack = 6 + this.depth * 2;
+    this.maxHp = 14 + this.depth * 2;
+    this.attack = baseAttack;
+    this.defense = 2 + Math.floor(this.depth / 2);
+    this.speed = typeConfig.speed || 100;
+    this.vision = typeConfig.vision || 6;
+    if (this.type === EnemyType.SPRINTER) {
+      this.maxHp -= 2;
+      this.attack -= 1;
+    } else if (this.type === EnemyType.STRATEGIST) {
+      this.defense += 1;
+    } else if (this.type === EnemyType.AMBUSHER) {
+      this.attack += 2;
+    }
+    if (this.faction === Factions.DEMON) {
+      this.attack += 2;
+      this.vision += 1;
+    } else if (this.faction === Factions.MACHINE) {
+      this.defense += 2;
+    } else if (this.faction === Factions.SPIRIT) {
+      this.speed += 5;
+    } else if (this.faction === Factions.BEAST) {
+      this.maxHp += 2;
     }
     this.hp = this.maxHp;
     this.energy = 0;
     this.aware = false;
-    this.grace = Config.graceTurns;
+    this.grace = factionConfig.grace ?? Config.graceTurns;
     this.turnsSinceSeen = 0;
+    this.factionColor = factionConfig.color;
+    this.badge = factionConfig.label;
+    this.flags = {
+      relentless: !!factionConfig.relentless,
+      trapWeak: !!factionConfig.trapWeak,
+      stealChance: factionConfig.stealChance || 0,
+      phaseChance: factionConfig.phaseChance || 0,
+      bleedImmune: !!factionConfig.bleedImmune,
+    };
+    this.patrolRoute = options.patrolRoute || [];
+    this.patrolIndex = 0;
+    this.stolenItems = [];
+    this.specialFx = null;
   }
 }
 
@@ -1490,18 +1871,22 @@ function generateId() {
 }
 
 class Item {
-  constructor(type, bonus = 0) {
+  constructor(type, data = {}) {
     this.id = generateId();
     this.type = type;
-    this.bonus = bonus;
+    Object.assign(this, data);
   }
 
   get label() {
     switch (this.type) {
-      case ItemType.SWORD:
-        return `剣+${this.bonus}`;
+      case ItemType.WEAPON: {
+        const rarity = this.rarity || "N";
+        const effect = this.effect ? `(${this.effect.label})` : "";
+        const bonus = this.attack !== undefined ? `+${this.attack}` : "";
+        return `${rarity} ${this.weaponLabel}${bonus}${effect}`;
+      }
       case ItemType.SHIELD:
-        return `盾+${this.bonus}`;
+        return `盾+${this.bonus ?? 0}`;
       case ItemType.HERB:
         return "草";
       case ItemType.SCROLL:
@@ -1510,6 +1895,25 @@ class Item {
         return "パン";
       case ItemType.STONE:
         return "石";
+      default:
+        return "?";
+    }
+  }
+
+  get icon() {
+    switch (this.type) {
+      case ItemType.WEAPON:
+        return "⚔";
+      case ItemType.SHIELD:
+        return "🛡";
+      case ItemType.HERB:
+        return "🌿";
+      case ItemType.SCROLL:
+        return "📜";
+      case ItemType.BREAD:
+        return "🥖";
+      case ItemType.STONE:
+        return "🪨";
       default:
         return "?";
     }
@@ -1542,6 +1946,9 @@ class Game {
     this.autoTimer = null;
     this.lastDirection = null;
     this.visited = new Set();
+    this.quickslots = Array(4).fill(null);
+    this.ui = null;
+    this.camera = { x: 0, y: 0, targetX: 0, targetY: 0 };
 
     this.resizeCanvas = this.resizeCanvas.bind(this);
     window.addEventListener("resize", this.resizeCanvas);
@@ -1641,10 +2048,12 @@ class Game {
     this.logMessages = [];
     this.clearAutomation();
     this.lastDirection = null;
+    this.quickslots = this.quickslots.map(() => null);
     this.generateFloor();
     this.updateHUD();
     this.resizeCanvas();
     this.pushMessage("地下1Fに降り立った。周囲を探索しよう。");
+    this.updateQuickslots();
   }
 
   generateFloor(options = {}) {
@@ -1674,6 +2083,8 @@ class Game {
       this.turn = 0;
     }
     this.playerSlowGate = false;
+    this.resetCamera();
+    this.updateQuickslots();
   }
 
   randomFloorTile(options = {}) {
@@ -1740,22 +2151,29 @@ class Game {
     if (roll < 0.65) return new Item(ItemType.BREAD);
     if (roll < 0.8) return new Item(ItemType.SCROLL);
     if (roll < 0.92) return new Item(ItemType.STONE);
-    const type = Math.random() < 0.5 ? ItemType.SWORD : ItemType.SHIELD;
+    if (Math.random() < 0.5) {
+      return createWeapon(this.depth, null);
+    }
     const bonus = randInt(1, 1 + Math.floor(this.depth / 3));
-    return new Item(type, bonus);
+    return new Item(ItemType.SHIELD, { bonus });
   }
 
   ensureEarlyEquipment(occupied) {
     if (this.depth > 2) return;
-    const hasGear = this.items.some(({ item }) => item.type === ItemType.SWORD || item.type === ItemType.SHIELD);
+    const hasGear = this.items.some(({ item }) => item.type === ItemType.WEAPON || item.type === ItemType.SHIELD);
     if (hasGear) return;
     const rooms = shuffle(this.rooms.slice(1));
     for (const room of rooms) {
       const spot = this.randomWalkableInRoom(room, occupied);
       if (!spot) continue;
-      const type = Math.random() < 0.5 ? ItemType.SWORD : ItemType.SHIELD;
-      const bonus = randInt(1, 1 + Math.floor(this.depth / 2));
-      if (this.placeItemAt(spot.x, spot.y, new Item(type, bonus))) {
+      let item;
+      if (Math.random() < 0.6) {
+        item = createWeapon(this.depth, null);
+      } else {
+        const bonus = randInt(1, 1 + Math.floor(this.depth / 2));
+        item = new Item(ItemType.SHIELD, { bonus });
+      }
+      if (this.placeItemAt(spot.x, spot.y, item)) {
         occupied.add(key(spot.x, spot.y));
         break;
       }
@@ -1819,10 +2237,14 @@ class Game {
         item = new Item(ItemType.BREAD);
       } else if (roll < 0.78) {
         item = new Item(ItemType.STONE);
-      } else if (roll < 0.9) {
-        item = new Item(ItemType.SWORD, randInt(1, 2 + Math.floor(this.depth / 3)));
       } else {
-        item = new Item(ItemType.SHIELD, randInt(1, 2 + Math.floor(this.depth / 3)));
+        if (roll < 0.9) {
+          item = createWeapon(this.depth, null);
+        } else {
+          item = new Item(ItemType.SHIELD, {
+            bonus: randInt(1, 2 + Math.floor(this.depth / 3)),
+          });
+        }
       }
       this.placeItemAt(x, y, item);
     }
@@ -1847,7 +2269,6 @@ class Game {
 
   spawnEnemies(startCenter) {
     const safeRadius = 6;
-    const types = [EnemyType.SPRINTER, EnemyType.STRATEGIST, EnemyType.WANDERER];
     if (this.depth <= Config.earlyDepthLimit) {
       const occupied = new Set([key(startCenter.x, startCenter.y)]);
       const maxTotal = Math.max(4, Math.floor(this.rooms.length * 1.2));
@@ -1866,7 +2287,12 @@ class Game {
           roomAvoid.add(spotKey);
           const distSq = (spot.x - startCenter.x) ** 2 + (spot.y - startCenter.y) ** 2;
           if (distSq < safeRadius * safeRadius) continue;
-          const enemy = new Enemy(spot.x, spot.y, randChoice(types), this.depth);
+          const faction = pickFaction(this.depth);
+          const type = pickEnemyType(this.depth);
+          const enemy = new Enemy(spot.x, spot.y, { type, depth: this.depth, faction });
+          if (enemy.type === EnemyType.PATROLLER) {
+            enemy.patrolRoute = this.buildPatrolRoute(enemy.x, enemy.y);
+          }
           this.entities.push(enemy);
           occupied.add(spotKey);
           total++;
@@ -1883,7 +2309,12 @@ class Game {
         const { x, y } = found;
         const spotKey = key(x, y);
         if (occupied.has(spotKey)) continue;
-        const enemy = new Enemy(x, y, randChoice(types), this.depth);
+        const faction = pickFaction(this.depth);
+        const type = pickEnemyType(this.depth);
+        const enemy = new Enemy(x, y, { type, depth: this.depth, faction });
+        if (enemy.type === EnemyType.PATROLLER) {
+          enemy.patrolRoute = this.buildPatrolRoute(enemy.x, enemy.y);
+        }
         this.entities.push(enemy);
         occupied.add(spotKey);
         total++;
@@ -1895,7 +2326,12 @@ class Game {
       const found = this.randomFloorTile({ avoid: { x: startCenter.x, y: startCenter.y, radius: safeRadius } });
       if (!found) continue;
       const { x, y } = found;
-      const enemy = new Enemy(x, y, randChoice(types), this.depth);
+      const faction = pickFaction(this.depth);
+      const type = pickEnemyType(this.depth);
+      const enemy = new Enemy(x, y, { type, depth: this.depth, faction });
+      if (enemy.type === EnemyType.PATROLLER) {
+        enemy.patrolRoute = this.buildPatrolRoute(enemy.x, enemy.y);
+      }
       this.entities.push(enemy);
     }
   }
@@ -1954,17 +2390,18 @@ class Game {
       return;
     }
 
+    const weapon = this.player.equipment.weapon;
     if (this.player.effects.snare > 0) {
       if (isAuto) this.clearAutomation();
       this.pushMessage("罠に拘束されて動けない…");
       this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
-      this.endPlayerTurn();
+      this.endPlayerTurn(ActionCost.MAJOR);
       return;
     }
     if (this.player.effects.slow > 0 && !this.playerSlowGate) {
       this.playerSlowGate = true;
       this.pushMessage("動きが鈍くて足が重い…");
-      this.endPlayerTurn();
+      this.endPlayerTurn(ActionCost.MAJOR);
       return;
     }
     if (this.player.effects.slow > 0 && this.playerSlowGate) {
@@ -1981,6 +2418,15 @@ class Game {
     const dir = Directions[effectiveDir];
     if (!dir) return;
 
+    if (weapon?.tags?.ranged && this.player.rangedLoaded) {
+      const fired = this.fireRangedWeapon(dir);
+      if (isAuto) this.clearAutomation();
+      if (fired) {
+        this.endPlayerTurn(ActionCost.MAJOR);
+      }
+      return;
+    }
+
     const nx = this.player.x + dir.x;
     const ny = this.player.y + dir.y;
     const tile = this.map[ny]?.[nx];
@@ -1995,6 +2441,22 @@ class Game {
     }
 
     const enemy = this.entities.find((e) => e !== this.player && e.x === nx && e.y === ny && e.isAlive());
+    if (weapon?.tags?.reach && !enemy && tile.isWalkable()) {
+      const fx = nx + dir.x;
+      const fy = ny + dir.y;
+      const farEnemy = this.entities.find((e) => e !== this.player && e.x === fx && e.y === fy && e.isAlive());
+      if (farEnemy) {
+        this.resolveCombat(this.player, farEnemy);
+        if (!farEnemy.isAlive()) {
+          this.player.kills++;
+          this.entities = this.entities.filter((e) => e.isAlive());
+          this.gainExp(12 + this.depth * 2);
+        }
+        if (isAuto) this.clearAutomation();
+        this.endPlayerTurn(ActionCost.MAJOR);
+        return;
+      }
+    }
     if (enemy) {
       this.resolveCombat(this.player, enemy);
       if (!enemy.isAlive()) {
@@ -2003,7 +2465,7 @@ class Game {
         this.gainExp(10 + this.depth * 2);
       }
       if (isAuto) this.clearAutomation();
-      this.endPlayerTurn();
+      this.endPlayerTurn(ActionCost.MAJOR);
       return;
     }
 
@@ -2024,7 +2486,7 @@ class Game {
     }
 
     this.handleTileEffects(tile);
-    this.endPlayerTurn();
+    this.endPlayerTurn(ActionCost.MAJOR);
   }
 
   getReversedDirection(dirKey) {
@@ -2045,7 +2507,7 @@ class Game {
         this.player.effects.snare = Math.max(0, this.player.effects.snare - 1);
       }
       this.pushMessage("私は身構えて様子を伺った。");
-      this.endPlayerTurn();
+      this.endPlayerTurn(ActionCost.MAJOR);
     }
   }
 
@@ -2186,13 +2648,16 @@ class Game {
 
   quickEquip() {
     this.clearAutomation();
-    const swords = this.player.inventory.filter((item) => item.type === ItemType.SWORD);
+    const weapons = this.player.inventory.filter((item) => item.type === ItemType.WEAPON);
     const shields = this.player.inventory.filter((item) => item.type === ItemType.SHIELD);
     let equipped = false;
-    if (swords.length) {
-      const bestSword = swords.reduce((best, item) => (item.bonus > (best?.bonus ?? -Infinity) ? item : best), null);
-      if (bestSword) {
-        this.equipItem(bestSword);
+    if (weapons.length) {
+      const bestWeapon = weapons.reduce(
+        (best, item) => (item.attack > (best?.attack ?? -Infinity) ? item : best),
+        null
+      );
+      if (bestWeapon) {
+        this.equipItem(bestWeapon);
         equipped = true;
       }
     }
@@ -2218,7 +2683,100 @@ class Game {
       return;
     }
     this.clearAutomation();
-    this.useItem(food);
+    this.useItem(food, { fromQuickslot: true });
+  }
+
+  attachUI(ui) {
+    this.ui = ui;
+    if (Array.isArray(ui.quickslotButtons) && ui.quickslotButtons.length !== this.quickslots.length) {
+      this.quickslots = Array(ui.quickslotButtons.length).fill(null);
+    }
+    this.updateQuickslots();
+  }
+
+  cleanQuickslots() {
+    const inventory = this.player?.inventory || [];
+    const ids = new Set(inventory.map((item) => item.id));
+    this.quickslots = this.quickslots.map((slot) => {
+      if (!slot) return null;
+      if (!ids.has(slot.itemId)) return null;
+      return slot;
+    });
+  }
+
+  getQuickslotState() {
+    this.cleanQuickslots();
+    const inventory = this.player?.inventory || [];
+    return this.quickslots.map((slot, index) => {
+      if (!slot) {
+        return { index, empty: true };
+      }
+      const item = inventory.find((it) => it.id === slot.itemId);
+      if (!item) {
+        this.quickslots[index] = null;
+        return { index, empty: true };
+      }
+      return {
+        index,
+        empty: false,
+        icon: item.icon,
+        label: item.label,
+        type: item.type,
+      };
+    });
+  }
+
+  updateQuickslots() {
+    if (this.ui?.renderQuickslots) {
+      this.ui.renderQuickslots(this.getQuickslotState());
+    }
+  }
+
+  assignQuickslot(index, itemId) {
+    if (index < 0 || index >= this.quickslots.length) return;
+    if (!this.player) return;
+    const item = this.player.inventory.find((i) => i.id === itemId);
+    if (!item) {
+      this.showToast("登録できない");
+      return;
+    }
+    this.quickslots[index] = {
+      itemId: item.id,
+      type: item.type,
+    };
+    this.showToast(`${item.label} を登録した`);
+    this.updateQuickslots();
+  }
+
+  clearQuickslot(index) {
+    if (index < 0 || index >= this.quickslots.length) return;
+    if (!this.player) return;
+    this.quickslots[index] = null;
+    this.updateQuickslots();
+  }
+
+  useQuickSlot(index) {
+    if (index < 0 || index >= this.quickslots.length) return;
+    if (!this.player) return;
+    const slot = this.quickslots[index];
+    if (!slot) {
+      this.showToast("空のスロット");
+      return;
+    }
+    const item = this.player.inventory.find((i) => i.id === slot.itemId);
+    if (!item) {
+      this.quickslots[index] = null;
+      this.updateQuickslots();
+      this.showToast("アイテムが見つからない");
+      return;
+    }
+    if (item.type === ItemType.WEAPON || item.type === ItemType.SHIELD) {
+      this.equipItem(item);
+      this.updateQuickslots();
+      return;
+    }
+    this.useItem(item, { fromQuickslot: true, sourceSlot: index });
+    this.updateQuickslots();
   }
 
   confirmAction() {
@@ -2230,24 +2788,41 @@ class Game {
       this.nextFloor();
       return;
     }
-    let disarmed = false;
+    const weapon = this.player.equipment.weapon;
+    const traps = [];
     for (const dy of [-1, 0, 1]) {
       for (const dx of [-1, 0, 1]) {
         const nx = this.player.x + dx;
         const ny = this.player.y + dy;
         const target = this.map[ny]?.[nx];
         if (target?.trap && target.trap.armed) {
-          target.trap.armed = false;
-          disarmed = true;
+          traps.push(target);
         }
       }
     }
-    if (disarmed) {
+    if (traps.length) {
+      for (const trap of traps) {
+        trap.trap.armed = false;
+      }
       this.pushMessage("足元の罠を見つけて解除した！");
-    } else {
-      this.pushMessage("周囲を警戒したが異常はなさそうだ。");
+      this.endPlayerTurn(ActionCost.MAJOR);
+      return;
     }
-    this.endPlayerTurn();
+    if (weapon?.tags?.ranged) {
+      if (!this.player.rangedLoaded) {
+        this.player.rangedLoaded = true;
+        this.pushMessage(`${weapon.weaponLabel} に矢をつがえた。`);
+        this.showToast("装填完了");
+        this.endPlayerTurn(ActionCost.MINOR);
+      } else {
+        this.player.rangedLoaded = false;
+        this.showToast("構えを解いた");
+        this.endPlayerTurn(ActionCost.FREE);
+      }
+      return;
+    }
+    this.pushMessage("周囲を警戒したが異常はなさそうだ。");
+    this.endPlayerTurn(ActionCost.MINOR);
   }
 
   drawMinimap(force = false) {
@@ -2303,6 +2878,7 @@ class Game {
       if (enemy === this.player || !enemy.isAlive()) continue;
       const cx = enemy.x * cellW + cellW / 2;
       const cy = enemy.y * cellH + cellH / 2;
+      ctx.fillStyle = enemy.factionColor || "#f87171";
       ctx.beginPath();
       ctx.arc(cx, cy, enemyRadius, 0, Math.PI * 2);
       ctx.fill();
@@ -2382,9 +2958,23 @@ class Game {
     return Config.baseHungerPerTurn;
   }
 
-  endPlayerTurn() {
+  endPlayerTurn(cost = ActionCost.MAJOR) {
+    if (cost === ActionCost.FREE) {
+      this.processItemsOnTile();
+      this.updateHUD();
+      this.draw();
+      return;
+    }
     this.turn++;
     const hungerDrain = this.getHungerDrain();
+    if (cost === ActionCost.MINOR) {
+      this.player.hunger = Math.max(0, this.player.hunger - hungerDrain * Config.balance.minorHungerFactor);
+      this.processItemsOnTile();
+      this.updateHUD();
+      this.draw();
+      this.scheduleAutomation();
+      return;
+    }
     this.player.hunger = Math.max(0, this.player.hunger - hungerDrain);
     if (this.player.hunger <= 0) {
       this.player.hp = Math.max(0, this.player.hp - Config.hungerDamage);
@@ -2418,6 +3008,7 @@ class Game {
       this.pushMessage(`${item.label} を拾った。`);
       this.showToast(`${item.label} 入手`);
       this.updateHUD();
+      this.updateQuickslots();
     }
   }
 
@@ -2429,9 +3020,23 @@ class Game {
         enemy.status.sleep--;
         continue;
       }
+      if (enemy.status.stun > 0) {
+        enemy.status.stun--;
+        continue;
+      }
       if (enemy.status.snare > 0) {
         enemy.status.snare--;
         continue;
+      }
+      if (enemy.status.bleed > 0) {
+        enemy.hp = Math.max(0, enemy.hp - 2);
+        enemy.status.bleed--;
+        if (!enemy.isAlive()) {
+          this.player.kills++;
+          this.gainExp(8 + this.depth * 2);
+          this.entities = this.entities.filter((e) => e.isAlive());
+          continue;
+        }
       }
       enemy.energy += enemy.speed;
       while (enemy.energy >= 100) {
@@ -2464,7 +3069,7 @@ class Game {
         enemy.aware = true;
         enemy.turnsSinceSeen = 0;
       } else {
-        this.wander(enemy);
+        this.enemyIdleMove(enemy);
         return;
       }
     }
@@ -2478,32 +3083,138 @@ class Game {
           enemy.aware = false;
           enemy.turnsSinceSeen = 0;
           enemy.grace = Config.graceTurns;
-          this.wander(enemy);
+          this.enemyIdleMove(enemy);
+          return;
+        }
+      }
+    } else {
+      if (withinSight) {
+        enemy.turnsSinceSeen = 0;
+      } else {
+        enemy.turnsSinceSeen = (enemy.turnsSinceSeen || 0) + 1;
+        const chaseLimit = enemy.flags.relentless ? 999 : 8;
+        if (enemy.turnsSinceSeen >= chaseLimit) {
+          enemy.aware = false;
+          enemy.turnsSinceSeen = 0;
+          enemy.grace = Config.graceTurns;
+          this.enemyIdleMove(enemy);
           return;
         }
       }
     }
 
     if (distManhattan === 1) {
-      this.resolveCombat(enemy, this.player);
+      if (enemy.flags.stealChance > 0 && Math.random() < enemy.flags.stealChance) {
+        this.enemySteal(enemy);
+        return;
+      }
+      this.resolveCombat(enemy, this.player, { faction: enemy.faction });
       if (!this.player.isAlive()) {
         this.gameOver("敵に倒されてしまった…");
       }
       return;
     }
 
+    if (enemy.type === EnemyType.PATROLLER && !enemy.aware) {
+      this.followPatrol(enemy);
+      return;
+    }
+
     let path = null;
-    if (enemy.type === EnemyType.STRATEGIST) {
+    if (enemy.type === EnemyType.STRATEGIST || enemy.type === EnemyType.PATROLLER || enemy.type === EnemyType.AMBUSHER) {
       path = this.findPath(enemy, this.player);
     } else if (enemy.type === EnemyType.SPRINTER && Math.random() < 0.5) {
       path = this.findPath(enemy, this.player);
     }
-    if (path && path.length > 1) {
-      enemy.x = path[1].x;
-      enemy.y = path[1].y;
-    } else {
-      this.chaseOrWander(enemy);
+
+    if (enemy.type === EnemyType.AMBUSHER) {
+      const predicted = this.predictPlayerTile();
+      if (predicted) {
+        const ambushPath = this.findPath(enemy, predicted);
+        if (ambushPath && ambushPath.length > 1) {
+          if (this.moveEnemyTo(enemy, ambushPath[1].x, ambushPath[1].y, { event: "ambush" })) {
+            return;
+          }
+        }
+      }
     }
+
+    if (path && path.length > 1) {
+      if (this.moveEnemyTo(enemy, path[1].x, path[1].y)) {
+        return;
+      }
+    }
+
+    if (enemy.type === EnemyType.PATROLLER) {
+      this.followPatrol(enemy);
+      return;
+    }
+
+    this.chaseOrWander(enemy);
+  }
+
+  moveEnemyTo(enemy, nx, ny, options = {}) {
+    if (nx === this.player.x && ny === this.player.y) return false;
+    const tile = this.map[ny]?.[nx];
+    if (!tile) return false;
+    if (!tile.isWalkable()) {
+      if (enemy.flags.phaseChance && Math.random() < enemy.flags.phaseChance) {
+        enemy.specialFx = { symbol: "〰", ttl: 8, color: enemy.factionColor };
+      } else {
+        return false;
+      }
+    }
+    if (this.entities.some((e) => e !== enemy && e !== this.player && e.isAlive() && e.x === nx && e.y === ny)) return false;
+    enemy.x = nx;
+    enemy.y = ny;
+    if (options.event === "ambush") {
+      enemy.specialFx = { symbol: "👣", ttl: 8, color: enemy.factionColor };
+    }
+    return true;
+  }
+
+  enemyIdleMove(enemy) {
+    if (enemy.type === EnemyType.PATROLLER) {
+      this.followPatrol(enemy);
+    } else {
+      this.wander(enemy);
+    }
+  }
+
+  predictPlayerTile() {
+    if (!this.lastDirection) return null;
+    const dir = Directions[this.lastDirection];
+    if (!dir) return null;
+    let x = this.player.x;
+    let y = this.player.y;
+    for (let i = 0; i < 2; i++) {
+      const nx = x + dir.x;
+      const ny = y + dir.y;
+      const tile = this.map[ny]?.[nx];
+      if (!tile || !tile.isWalkable()) break;
+      x = nx;
+      y = ny;
+    }
+    return { x, y };
+  }
+
+  enemySteal(enemy) {
+    if (!this.player.inventory.length) {
+      this.pushMessage("盗もうとしたが何も持っていない。");
+      return;
+    }
+    const item = randChoice(this.player.inventory);
+    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+    enemy.stolenItems.push(item);
+    enemy.aware = false;
+    enemy.turnsSinceSeen = 0;
+    enemy.grace = Config.graceTurns + 1;
+    this.pushMessage("盗賊にアイテムを奪われた！");
+    this.showToast(`${item.label} を盗まれた`);
+    this.recalculateStats();
+    this.updateHUD();
+    this.updateQuickslots();
+    this.enemyIdleMove(enemy);
   }
 
   findPath(startEntity, targetEntity) {
@@ -2610,14 +3321,126 @@ class Game {
     }
   }
 
-  resolveCombat(attacker, defender) {
-    const attack = attacker.attack + randInt(0, 2);
-    const defense = defender.defense + randInt(0, 2);
-    const damage = Math.max(1, attack - defense);
+  buildPatrolRoute(x, y) {
+    const points = [];
+    let cx = x;
+    let cy = y;
+    const order = [Directions.right, Directions.down, Directions.left, Directions.up];
+    for (const dir of order) {
+      let step = 0;
+      let nextX = cx;
+      let nextY = cy;
+      while (step < 4) {
+        const nx = nextX + dir.x;
+        const ny = nextY + dir.y;
+        const tile = this.map[ny]?.[nx];
+        if (!tile || !tile.isWalkable()) break;
+        nextX = nx;
+        nextY = ny;
+        step++;
+      }
+      if (nextX !== cx || nextY !== cy) {
+        points.push({ x: nextX, y: nextY });
+        cx = nextX;
+        cy = nextY;
+      }
+    }
+    if (!points.length) {
+      points.push({ x, y });
+    }
+    return points;
+  }
+
+  followPatrol(enemy) {
+    if (!enemy.patrolRoute.length) {
+      this.wander(enemy);
+      return;
+    }
+    const target = enemy.patrolRoute[enemy.patrolIndex % enemy.patrolRoute.length];
+    if (enemy.x === target.x && enemy.y === target.y) {
+      enemy.patrolIndex = (enemy.patrolIndex + 1) % enemy.patrolRoute.length;
+    }
+    const nextTarget = enemy.patrolRoute[enemy.patrolIndex % enemy.patrolRoute.length];
+    const path = this.findPath(enemy, nextTarget);
+    if (path && path.length > 1) {
+      if (this.moveEnemyTo(enemy, path[1].x, path[1].y)) {
+        return;
+      }
+    }
+    this.wander(enemy);
+  }
+
+  resolveCombat(attacker, defender, options = {}) {
+    let attackValue = attacker.attack;
+    let defenseValue = defender.defense;
+    let pierceBonus = 0;
+    let applyBleed = false;
+    let applyStun = false;
+    let reflectGuard = false;
+    if (attacker === this.player) {
+      const weapon = this.player.equipment.weapon;
+      if (weapon) {
+        attackValue = this.player.baseAttack + weapon.attack;
+        if (weapon.tags?.attackMod) {
+          attackValue += weapon.tags.attackMod;
+        }
+        if (weapon.effect?.id === WeaponEffects.PIERCE.id) {
+          pierceBonus = 2;
+        }
+        if (weapon.effect?.id === WeaponEffects.BLEED.id) {
+          applyBleed = true;
+        }
+        if (weapon.effect?.id === WeaponEffects.STUN.id) {
+          applyStun = true;
+        }
+        if (weapon.tags?.firstStrike) {
+          defender.energy = 0;
+        }
+        if (weapon.tags?.heavy && Math.random() < 0.12) {
+          this.player.effects.slow = Math.max(this.player.effects.slow, 1);
+          this.pushMessage("武器が重くて隙が生まれた…");
+        }
+      }
+    } else if (defender === this.player) {
+      const weapon = this.player.equipment.weapon;
+      if (weapon?.effect?.id === WeaponEffects.REFLECT.id) {
+        reflectGuard = true;
+      }
+      if (weapon?.tags?.heavy) {
+        defenseValue += 1;
+      }
+    }
+    const attackRoll = attackValue + randInt(0, 2);
+    let defenseRoll = defenseValue + randInt(0, 2) - pierceBonus;
+    defenseRoll = Math.max(0, defenseRoll);
+    const damage = Math.max(1, attackRoll - defenseRoll);
     defender.hp = Math.max(0, defender.hp - damage);
     const attackerName = attacker === this.player ? "私" : "敵";
     const defenderName = defender === this.player ? "私" : "敵";
     this.pushMessage(`${attackerName}は${defenderName}に${damage}のダメージ！`);
+    if (attacker === this.player && defender instanceof Enemy) {
+      if (applyBleed && !defender.flags.bleedImmune) {
+        defender.status.bleed = Math.max(defender.status.bleed, 3);
+        this.pushMessage("出血させた！");
+      }
+      if (applyStun) {
+        defender.status.stun = Math.max(defender.status.stun, 1);
+        this.pushMessage("敵の動きを止めた！");
+      }
+    }
+    if (defender === this.player && reflectGuard && damage > 0) {
+      attacker.hp = Math.max(0, attacker.hp - Math.ceil(damage / 2));
+      if (attacker.hp <= 0) {
+        this.pushMessage("反射の光が敵を焼いた！");
+      } else {
+        this.pushMessage("反射の光で敵にダメージ！");
+      }
+    }
+    if (attacker !== this.player && attacker instanceof Enemy && attacker.hp <= 0) {
+      this.player.kills++;
+      this.entities = this.entities.filter((e) => e.isAlive());
+      this.gainExp(10 + this.depth * 2);
+    }
     if (defender.hp <= 0) {
       this.pushMessage(`${defenderName}を倒した！`);
       if (defender === this.player) {
@@ -2660,7 +3483,7 @@ class Game {
         label.textContent = item.label;
         li.appendChild(label);
         const actions = document.createElement("div");
-        if (item.type === ItemType.SWORD || item.type === ItemType.SHIELD) {
+        if (item.type === ItemType.WEAPON || item.type === ItemType.SHIELD) {
           const btn = document.createElement("button");
           btn.textContent = "装備";
           btn.addEventListener("click", () => {
@@ -2685,6 +3508,12 @@ class Game {
         });
         actions.appendChild(drop);
         li.appendChild(actions);
+        li.draggable = true;
+        li.dataset.itemId = item.id;
+        li.addEventListener("dragstart", (ev) => {
+          ev.dataTransfer?.setData("text/plain", item.id);
+          ev.dataTransfer?.setDragImage(label, 0, 0);
+        });
         list.appendChild(li);
       }
     }
@@ -2696,15 +3525,26 @@ class Game {
   }
 
   equipItem(item) {
-    if (item.type === ItemType.SWORD) {
-      this.player.equipment.sword = item;
+    if (item.type === ItemType.WEAPON) {
+      const previous = this.player.equipment.weapon;
+      this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+      if (previous) {
+        this.player.inventory.push(previous);
+      }
+      this.player.equipment.weapon = item;
+      this.player.rangedLoaded = false;
     } else if (item.type === ItemType.SHIELD) {
+      const previous = this.player.equipment.shield;
+      this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
+      if (previous) {
+        this.player.inventory.push(previous);
+      }
       this.player.equipment.shield = item;
     }
     this.recalculateStats();
     this.pushMessage(`${item.label} を装備した。`);
-    this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
     this.updateHUD();
+    this.updateQuickslots();
   }
 
   dropItem(item) {
@@ -2717,18 +3557,22 @@ class Game {
     this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
     this.pushMessage(`${item.label} を置いた。`);
     this.updateHUD();
+    this.updateQuickslots();
   }
 
   recalculateStats() {
     let attack = this.player.baseAttack;
     let defense = this.player.baseDefense;
-    if (this.player.equipment.sword) attack += this.player.equipment.sword.bonus;
+    const weapon = this.player.equipment.weapon;
+    if (weapon) {
+      attack += weapon.attack + (weapon.tags?.attackMod || 0);
+    }
     if (this.player.equipment.shield) defense += this.player.equipment.shield.bonus;
     this.player.attack = attack;
     this.player.defense = defense;
   }
 
-  useItem(item) {
+  useItem(item, { fromQuickslot = false } = {}) {
     switch (item.type) {
       case ItemType.HERB: {
         const heal = 18;
@@ -2752,8 +3596,9 @@ class Game {
         break;
     }
     this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
-    this.closeInventory();
-    this.endPlayerTurn();
+    if (!fromQuickslot) this.closeInventory();
+    this.updateQuickslots();
+    this.endPlayerTurn(fromQuickslot ? ActionCost.MINOR : ActionCost.MAJOR);
   }
 
   performThrow(direction) {
@@ -2787,7 +3632,38 @@ class Game {
     if (!hit) this.pushMessage("石は床に落ちた。");
     this.player.inventory = this.player.inventory.filter((i) => i.id !== item.id);
     this.closeInventory();
-    this.endPlayerTurn();
+    this.updateQuickslots();
+    this.endPlayerTurn(ActionCost.MAJOR);
+  }
+
+  fireRangedWeapon(direction) {
+    const weapon = this.player.equipment.weapon;
+    if (!weapon) return false;
+    let x = this.player.x;
+    let y = this.player.y;
+    let hit = false;
+    for (let i = 0; i < weapon.range; i++) {
+      x += direction.x;
+      y += direction.y;
+      const tile = this.map[y]?.[x];
+      if (!tile || !tile.isWalkable()) break;
+      const enemy = this.entities.find((e) => e !== this.player && e.x === x && e.y === y && e.isAlive());
+      if (enemy) {
+        this.resolveCombat(this.player, enemy);
+        if (!enemy.isAlive()) {
+          this.player.kills++;
+          this.entities = this.entities.filter((e) => e.isAlive());
+          this.gainExp(12 + this.depth * 2);
+        }
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) {
+      this.pushMessage("矢は空を切った。");
+    }
+    this.player.rangedLoaded = false;
+    return true;
   }
 
   castScroll() {
@@ -2849,15 +3725,50 @@ class Game {
     }, 1800);
   }
 
+  resetCamera() {
+    if (!this.player) return;
+    const px = this.player.x + 0.5;
+    const py = this.player.y + 0.5;
+    this.camera.x = px;
+    this.camera.y = py;
+    this.camera.targetX = px;
+    this.camera.targetY = py;
+  }
+
+  updateCamera(force = false) {
+    if (!this.player) return;
+    const px = this.player.x + 0.5;
+    const py = this.player.y + 0.5;
+    if (force) {
+      this.camera.x = px;
+      this.camera.y = py;
+      this.camera.targetX = px;
+      this.camera.targetY = py;
+      return;
+    }
+    const deadzone = Config.camera.deadzone;
+    if (Math.abs(px - this.camera.targetX) > deadzone) {
+      this.camera.targetX = px;
+    }
+    if (Math.abs(py - this.camera.targetY) > deadzone) {
+      this.camera.targetY = py;
+    }
+    this.camera.x += (this.camera.targetX - this.camera.x) * Config.camera.lerp;
+    this.camera.y += (this.camera.targetY - this.camera.y) * Config.camera.lerp;
+  }
+
   draw() {
     if (!this.map) return;
     const ctx = this.ctx;
     const width = this.canvas.width / window.devicePixelRatio;
     const height = this.canvas.height / window.devicePixelRatio;
     ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#050b18";
+    ctx.fillRect(0, 0, width, height);
     const tileSize = Config.tileSize;
-    const offsetX = (width - this.map[0].length * tileSize) / 2;
-    const offsetY = (height - this.map.length * tileSize) / 2;
+    this.updateCamera();
+    const offsetX = width / 2 - (this.camera.x - 0.5) * tileSize;
+    const offsetY = height / 2 - (this.camera.y - 0.5) * tileSize;
     ctx.save();
     ctx.translate(offsetX, offsetY);
     for (let y = 0; y < this.map.length; y++) {
@@ -2922,12 +3833,33 @@ class Game {
         const enemySize = tileSize * 0.65;
         const halfEnemy = enemySize / 2;
         ctx.save();
-        ctx.fillStyle = "#ef4444";
-        ctx.strokeStyle = "#111";
+        const bodyColor = entity.factionColor || "#ef4444";
+        ctx.fillStyle = bodyColor;
+        ctx.strokeStyle = "#0f172a";
         ctx.lineWidth = 2;
         drawRoundedRect(ctx, centerX - halfEnemy, centerY - halfEnemy, enemySize, enemySize, enemySize * 0.2);
         ctx.fill();
         ctx.stroke();
+        if (entity.badge) {
+          ctx.fillStyle = "rgba(15,23,42,0.85)";
+          ctx.beginPath();
+          ctx.arc(centerX, centerY - enemySize * 0.55, enemySize * 0.28, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#f9fafb";
+          ctx.font = `${enemySize * 0.45}px 'Noto Sans JP', sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(entity.badge, centerX, centerY - enemySize * 0.55);
+        }
+        if (entity.specialFx?.ttl > 0) {
+          ctx.fillStyle = entity.specialFx.color || "#facc15";
+          ctx.font = `${enemySize * 0.6}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(entity.specialFx.symbol, centerX, centerY + enemySize * 0.1);
+          entity.specialFx.ttl -= 1;
+          if (entity.specialFx.ttl <= 0) entity.specialFx = null;
+        }
         ctx.restore();
       }
     }
@@ -2971,29 +3903,37 @@ class Game {
       ctx.strokeStyle = "#f8f8f8";
       ctx.lineWidth = 1.5;
       ctx.strokeRect(px + 8, py + 8, size - 16, size - 16);
-      ctx.fillStyle = "#e1f5fe";
-      ctx.font = `${size - 12}px 'Noto Sans JP', sans-serif`;
       let symbol = "?";
+      let itemColor = "#e1f5fe";
       switch (tile.item.type) {
-        case ItemType.SWORD:
-          symbol = "剣";
+        case ItemType.WEAPON:
+          symbol = tile.item.weaponLabel?.[0] || "武";
+          itemColor = "#34d399";
           break;
         case ItemType.SHIELD:
           symbol = "盾";
+          itemColor = "#60a5fa";
           break;
         case ItemType.HERB:
           symbol = "草";
+          itemColor = "#86efac";
           break;
         case ItemType.SCROLL:
           symbol = "巻";
+          itemColor = "#a855f7";
           break;
         case ItemType.BREAD:
           symbol = "食";
+          itemColor = "#fb923c";
           break;
         case ItemType.STONE:
           symbol = "石";
+          itemColor = "#cbd5f5";
           break;
       }
+      ctx.fillStyle = itemColor;
+      ctx.font = `${size - 12}px 'Noto Sans JP', sans-serif`;
+      ctx.textBaseline = "top";
       ctx.fillText(symbol, px + 8, py + 8);
     }
     if (this.debugGrid) {
@@ -3062,6 +4002,7 @@ class Game {
 
 const game = new Game();
 const mobileUI = new MobileUI(game);
+game.attachUI(mobileUI);
 
 window.game = game;
 
