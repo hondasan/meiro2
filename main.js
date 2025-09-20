@@ -3,6 +3,7 @@ const defaultUISettings = {
   dpadSize: "M",
   dpadOffset: { x: 0, y: 0 },
   haptics: false,
+  autoHide: true,
   reduceMotion: false,
   highContrast: false,
   fontScale: 1,
@@ -31,11 +32,18 @@ const Config = {
   braidRatioRange: [0.25, 0.45],
   branchRatioTarget: 0.15,
   corridorWidenChance: 0.4,
-  hungerPerTurn: 1,
+  baseHungerPerTurn: 1,
+  earlyHungerPerTurn: 0.2,
   hungerDamage: 3,
   maxInventory: 20,
   fogRadius: 5,
   graceTurns: 2,
+  earlyDepthLimit: 3,
+  earlyEnemyActionChance: 0.5,
+  earlyEnemySight: 5,
+  earlyEnemyChaseTurns: 5,
+  earlyRoomEnemyCap: 2,
+  padCollapsedHeight: 48,
   swipeThreshold: 26,
   flickTime: 220,
   longPressFlickTime: 260,
@@ -154,6 +162,7 @@ class MobileUI {
     this.stage = document.getElementById("stage");
     this.padDock = document.getElementById("pad-dock");
     this.dockInner = this.padDock?.querySelector?.(".dock-inner");
+    this.padHandle = document.getElementById("pad-handle");
     this.thumbZone = document.getElementById("thumb-zone");
     this.dpad = document.getElementById("dpad");
     this.menuBtn = document.getElementById("menu-btn");
@@ -174,6 +183,9 @@ class MobileUI {
     this.radialActiveSlot = null;
     this.radialPointerId = null;
     this.radialActions = this.buildRadialActions();
+    this.autoHideTimer = null;
+    this.padHeld = false;
+    this.padCollapsedHeight = Config.padCollapsedHeight || 48;
 
     this.applySettings();
     this.setupHandSelection();
@@ -182,6 +194,7 @@ class MobileUI {
     this.setupControls();
     this.setupRadialMenu();
     this.setupTouchInput();
+    this.setupDockHandle();
     this.setupSettingsPanel();
     this.observeViewport();
     this.layout();
@@ -252,6 +265,7 @@ class MobileUI {
     this.settings.spacing = Math.max(8, this.settings.spacing || 8);
     this.settings.autoRepeatInitial = Number(this.settings.autoRepeatInitial) || defaultUISettings.autoRepeatInitial;
     this.settings.autoRepeatInterval = Number(this.settings.autoRepeatInterval) || defaultUISettings.autoRepeatInterval;
+    this.settings.autoHide = this.settings.autoHide !== false;
     document.documentElement.style.setProperty(
       "--pad-gap",
       `${Math.max(8, this.settings.spacing || 8)}px`
@@ -262,6 +276,10 @@ class MobileUI {
     this.dpad.dataset.size = this.settings.dpadSize;
     this.reachGuide.classList.toggle("show", !!this.settings.reachGuide);
     this.updateThumbOffset();
+    if (!this.settings.autoHide) {
+      this.cancelAutoHide();
+      this.padDock?.setAttribute("aria-expanded", "true");
+    }
     this.renderRadialSlots();
     this.layout();
   }
@@ -323,6 +341,8 @@ class MobileUI {
         { passive: false }
       );
     });
+    this.bindAuxButton(this.confirmBtn);
+    this.bindAuxButton(this.menuBtn);
     window.addEventListener(
       "pointermove",
       (e) => this.onPadPointerMove(e),
@@ -345,9 +365,13 @@ class MobileUI {
       { passive: false }
     );
 
-    this.confirmBtn.addEventListener("click", () => this.game.confirmAction());
+    this.confirmBtn.addEventListener("click", () => {
+      this.onUserInteract();
+      this.game.confirmAction();
+    });
 
     this.menuBtn.addEventListener("click", (e) => {
+      this.onUserInteract();
       if (this.menuBtn.dataset.longPress === "true") {
         this.menuBtn.dataset.longPress = "false";
         return;
@@ -388,6 +412,7 @@ class MobileUI {
     e.preventDefault();
     this.padPointer = e.pointerId;
     this.padCurrentBtn = btn;
+    this.handlePadPressStart();
     this.triggerPadAction(btn.dataset.action);
     this.dpad.setPointerCapture?.(e.pointerId);
     this.padRepeatTimer = setTimeout(() => {
@@ -445,6 +470,7 @@ class MobileUI {
     if (clearPointer) {
       this.padPointer = null;
       this.padCurrentBtn = null;
+      this.handlePadPressEnd();
     }
   }
 
@@ -566,6 +592,8 @@ class MobileUI {
 
   openRadial(x, y) {
     if (this.radial.classList.contains("active")) return;
+    this.expandPadDock();
+    this.cancelAutoHide();
     this.radial.classList.add("active");
     const dockRect = this.padDock?.getBoundingClientRect();
     if (dockRect) {
@@ -587,6 +615,7 @@ class MobileUI {
     this.radialActiveSlot?.classList.remove("active");
     this.radialActiveSlot = null;
     this.radial.classList.remove("active");
+    this.resetAutoHide();
   }
 
   positionRadialSlots() {
@@ -652,6 +681,10 @@ class MobileUI {
           startY: e.clientY,
           startTime: performance.now(),
         };
+        if (this.padDock?.getAttribute("aria-expanded") === "false" && this.isInBottomZone(e.clientX, e.clientY)) {
+          this.expandPadDock(true);
+        }
+        this.resetAutoHide();
         this.touchLongPress = setTimeout(() => {
           if (this.isInBottomZone(e.clientX, e.clientY)) {
             this.openRadial(e.clientX, e.clientY);
@@ -680,6 +713,7 @@ class MobileUI {
         clearTimeout(this.touchLongPress);
         const session = this.touchSession;
         this.touchSession = null;
+        this.resetAutoHide();
         if (this.twoFingerWait) {
           this.twoFingerWait = false;
           return;
@@ -706,6 +740,7 @@ class MobileUI {
       () => {
         clearTimeout(this.touchLongPress);
         this.touchSession = null;
+        this.resetAutoHide();
       },
       { passive: false }
     );
@@ -718,6 +753,7 @@ class MobileUI {
           this.twoFingerWait = true;
           this.touchSession = null;
           clearTimeout(this.touchLongPress);
+          this.resetAutoHide();
         }
       },
       { passive: false }
@@ -729,8 +765,24 @@ class MobileUI {
           this.game.handleAction(Action.WAIT, "twofinger");
           this.twoFingerWait = false;
         }
+        this.resetAutoHide();
       }
     );
+  }
+
+  setupDockHandle() {
+    if (!this.padDock) return;
+    if (this.padHandle) {
+      this.padHandle.addEventListener("click", () => {
+        const expanded = this.padDock.getAttribute("aria-expanded") !== "false";
+        if (expanded && this.settings.autoHide) {
+          this.collapsePadDock(true);
+        } else {
+          this.expandPadDock(true);
+          this.resetAutoHide();
+        }
+      });
+    }
   }
 
   handleTap(clientX, clientY) {
@@ -758,6 +810,7 @@ class MobileUI {
     form.dpadSize.value = this.settings.dpadSize;
     form.padSpacing.value = this.settings.spacing;
     form.haptics.checked = !!this.settings.haptics;
+    form.autoHide.checked = !!this.settings.autoHide;
     form.reduceMotion.checked = !!this.settings.reduceMotion;
     form.highContrast.checked = !!this.settings.highContrast;
     form.fontScale.value = this.settings.fontScale;
@@ -772,6 +825,7 @@ class MobileUI {
       this.settings.dpadSize = form.dpadSize.value;
       this.settings.spacing = parseInt(form.padSpacing.value, 10) || this.settings.spacing;
       this.settings.haptics = form.haptics.checked;
+      this.settings.autoHide = form.autoHide.checked;
       this.settings.reduceMotion = form.reduceMotion.checked;
       this.settings.highContrast = form.highContrast.checked;
       this.settings.fontScale = parseFloat(form.fontScale.value) || 1;
@@ -793,6 +847,7 @@ class MobileUI {
     form.dpadSize.value = this.settings.dpadSize;
     form.padSpacing.value = this.settings.spacing;
     form.haptics.checked = !!this.settings.haptics;
+    form.autoHide.checked = !!this.settings.autoHide;
     form.reduceMotion.checked = !!this.settings.reduceMotion;
     form.highContrast.checked = !!this.settings.highContrast;
     form.fontScale.value = this.settings.fontScale;
@@ -821,6 +876,104 @@ class MobileUI {
     }
   }
 
+  bindAuxButton(button) {
+    if (!button) return;
+    button.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        this.handlePadPressStart();
+      },
+      { passive: true }
+    );
+    button.addEventListener(
+      "pointerup",
+      () => this.handlePadPressEnd(),
+      { passive: true }
+    );
+    button.addEventListener(
+      "pointercancel",
+      () => this.handlePadPressEnd(),
+      { passive: true }
+    );
+  }
+
+  handlePadPressStart() {
+    if (this.padHeld) return;
+    this.padHeld = true;
+    this.expandPadDock();
+    this.cancelAutoHide();
+    this.padDock?.classList.add("is-pressed");
+  }
+
+  handlePadPressEnd() {
+    if (!this.padHeld) return;
+    this.padHeld = false;
+    this.padDock?.classList.remove("is-pressed");
+    this.resetAutoHide();
+  }
+
+  expandPadDock(force = false) {
+    if (!this.padDock) return;
+    const expanded = this.padDock.getAttribute("aria-expanded") !== "false";
+    if (expanded && !force) return;
+    this.padDock.setAttribute("aria-expanded", "true");
+    this.updatePadHeight();
+  }
+
+  collapsePadDock(force = false) {
+    if (!this.padDock) return;
+    if (!this.settings.autoHide && !force) return;
+    if (this.padHeld && !force) {
+      this.resetAutoHide();
+      return;
+    }
+    if (this.padDock.getAttribute("aria-expanded") === "false") return;
+    this.padDock.setAttribute("aria-expanded", "false");
+    this.updatePadHeight();
+  }
+
+  cancelAutoHide() {
+    clearTimeout(this.autoHideTimer);
+    this.autoHideTimer = null;
+  }
+
+  resetAutoHide() {
+    this.cancelAutoHide();
+    if (!this.settings.autoHide) return;
+    if (!document.body.classList.contains("dock-active")) return;
+    this.autoHideTimer = setTimeout(() => this.collapsePadDock(), 1500);
+  }
+
+  onUserInteract({ expand = true } = {}) {
+    if (expand) this.expandPadDock();
+    this.resetAutoHide();
+  }
+
+  updatePadHeight() {
+    if (!document.body.classList.contains("dock-active")) {
+      document.documentElement.style.setProperty("--pad-h", "0px");
+      this.game.resizeCanvas();
+      this.positionRadialSlots();
+      return;
+    }
+    this.dockInner = this.padDock?.querySelector?.(".dock-inner");
+    requestAnimationFrame(() => {
+      const expanded = this.padDock?.getAttribute("aria-expanded") !== "false";
+      let padHeight = this.padCollapsedHeight;
+      if (expanded) {
+        if (this.dockInner) {
+          padHeight = this.dockInner.offsetHeight;
+        } else if (this.padDock) {
+          padHeight = Math.max(0, this.padDock.offsetHeight - this.getSafeBottom());
+        }
+      }
+      document.documentElement.style.setProperty("--pad-h", `${padHeight}px`);
+      this.game.resizeCanvas();
+      this.positionRadialSlots();
+    });
+  }
+
   observeViewport() {
     window.addEventListener("resize", () => this.layout());
     if (window.visualViewport) {
@@ -838,23 +991,19 @@ class MobileUI {
     }
     document.body.classList.toggle("dock-active", isMobile);
     if (!isMobile) {
+      this.padDock?.setAttribute("aria-expanded", "true");
+      this.cancelAutoHide();
       document.documentElement.style.setProperty("--pad-h", "0px");
       this.game.resizeCanvas();
       this.positionRadialSlots();
       return;
     }
-    document.documentElement.style.setProperty("--pad-h", "0px");
-    requestAnimationFrame(() => {
-      let padHeight = 0;
-      if (this.dockInner) {
-        padHeight = this.dockInner.offsetHeight;
-      } else if (this.padDock) {
-        padHeight = Math.max(0, this.padDock.offsetHeight - this.getSafeBottom());
-      }
-      document.documentElement.style.setProperty("--pad-h", `${padHeight}px`);
-      this.game.resizeCanvas();
-      this.positionRadialSlots();
-    });
+    if (!this.settings.autoHide) {
+      this.padDock?.setAttribute("aria-expanded", "true");
+    }
+    this.updatePadHeight();
+    this.positionRadialSlots();
+    this.resetAutoHide();
   }
 
   getViewport() {
@@ -900,6 +1049,21 @@ function clamp(v, min, max) {
 
 function key(x, y) {
   return `${x},${y}`;
+}
+
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 class Tile {
@@ -1265,7 +1429,7 @@ class Player extends Entity {
   constructor(x, y) {
     super(x, y);
     this.type = "player";
-    this.maxHp = 30;
+    this.maxHp = 40;
     this.hp = this.maxHp;
     this.baseAttack = 5;
     this.baseDefense = 2;
@@ -1314,6 +1478,7 @@ class Enemy extends Entity {
     this.energy = 0;
     this.aware = false;
     this.grace = Config.graceTurns;
+    this.turnsSinceSeen = 0;
   }
 }
 
@@ -1529,29 +1694,121 @@ class Game {
     return null;
   }
 
-  placeInitialItems(startRoom) {
-    const safeRadius = randInt(3, 8);
-    let placed = false;
-    for (let attempt = 0; attempt < 40 && !placed; attempt++) {
+  placeItemAt(x, y, item) {
+    const tile = this.map[y]?.[x];
+    if (!tile || !tile.isWalkable() || tile.item) return false;
+    tile.item = item;
+    this.items.push({ item, x, y });
+    return true;
+  }
+
+  randomWalkableInRoom(room, avoidSet = new Set()) {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const x = randInt(room.x, room.x + room.w - 1);
+      const y = randInt(room.y, room.y + room.h - 1);
+      const tile = this.map[y]?.[x];
+      if (!tile || !tile.isWalkable()) continue;
+      if (tile.terrain === Terrain.STAIRS) continue;
+      const k = key(x, y);
+      if (avoidSet.has(k)) continue;
+      if (this.entities.some((e) => e.x === x && e.y === y)) continue;
+      if (tile.item) continue;
+      return { x, y, tile };
+    }
+    return null;
+  }
+
+  findNearbyTile(center, radius, avoidSet = new Set()) {
+    for (let attempt = 0; attempt < 80; attempt++) {
       const angle = Math.random() * Math.PI * 2;
-      const r = randInt(1, safeRadius);
-      const x = clamp(Math.floor(startRoom.center.x + Math.cos(angle) * r), 1, this.map[0].length - 2);
-      const y = clamp(Math.floor(startRoom.center.y + Math.sin(angle) * r), 1, this.map.length - 2);
-      const tile = this.map[y][x];
-      if (!tile.isWalkable() || tile.item) continue;
-      const item = new Item(Math.random() < 0.5 ? ItemType.HERB : ItemType.SCROLL);
-      tile.item = item;
-      placed = true;
+      const dist = randInt(1, radius);
+      const x = clamp(Math.floor(center.x + Math.cos(angle) * dist), 1, this.map[0].length - 2);
+      const y = clamp(Math.floor(center.y + Math.sin(angle) * dist), 1, this.map.length - 2);
+      const tile = this.map[y]?.[x];
+      if (!tile || !tile.isWalkable() || tile.terrain === Terrain.STAIRS) continue;
+      const k = key(x, y);
+      if (avoidSet.has(k)) continue;
+      if (tile.item) continue;
+      return { x, y, tile };
+    }
+    return null;
+  }
+
+  rollEarlyItem() {
+    const roll = Math.random();
+    if (roll < 0.35) return new Item(ItemType.HERB);
+    if (roll < 0.65) return new Item(ItemType.BREAD);
+    if (roll < 0.8) return new Item(ItemType.SCROLL);
+    if (roll < 0.92) return new Item(ItemType.STONE);
+    const type = Math.random() < 0.5 ? ItemType.SWORD : ItemType.SHIELD;
+    const bonus = randInt(1, 1 + Math.floor(this.depth / 3));
+    return new Item(type, bonus);
+  }
+
+  ensureEarlyEquipment(occupied) {
+    if (this.depth > 2) return;
+    const hasGear = this.items.some(({ item }) => item.type === ItemType.SWORD || item.type === ItemType.SHIELD);
+    if (hasGear) return;
+    const rooms = shuffle(this.rooms.slice(1));
+    for (const room of rooms) {
+      const spot = this.randomWalkableInRoom(room, occupied);
+      if (!spot) continue;
+      const type = Math.random() < 0.5 ? ItemType.SWORD : ItemType.SHIELD;
+      const bonus = randInt(1, 1 + Math.floor(this.depth / 2));
+      if (this.placeItemAt(spot.x, spot.y, new Item(type, bonus))) {
+        occupied.add(key(spot.x, spot.y));
+        break;
+      }
+    }
+  }
+
+  populateEarlyItems() {
+    const occupied = new Set(this.items.map(({ x, y }) => key(x, y)));
+    for (let i = 1; i < this.rooms.length; i++) {
+      const room = this.rooms[i];
+      const spawnCount = 1 + (Math.random() < 0.4 ? 1 : 0);
+      for (let j = 0; j < spawnCount; j++) {
+        const spot = this.randomWalkableInRoom(room, occupied);
+        if (!spot) continue;
+        if (this.placeItemAt(spot.x, spot.y, this.rollEarlyItem())) {
+          occupied.add(key(spot.x, spot.y));
+        }
+      }
+    }
+    this.ensureEarlyEquipment(occupied);
+  }
+
+  placeInitialItems(startRoom) {
+    if (this.depth === 1) {
+      const taken = new Set([key(startRoom.center.x, startRoom.center.y)]);
+      const herb = this.findNearbyTile(startRoom.center, 5, taken);
+      if (herb && this.placeItemAt(herb.x, herb.y, new Item(ItemType.HERB))) {
+        taken.add(key(herb.x, herb.y));
+      }
+      const bread = this.findNearbyTile(startRoom.center, 5, taken);
+      if (bread && this.placeItemAt(bread.x, bread.y, new Item(ItemType.BREAD))) {
+        taken.add(key(bread.x, bread.y));
+      }
+    } else {
+      const radius = clamp(randInt(3, 6), 2, 8);
+      const nearby = this.findNearbyTile(startRoom.center, radius);
+      if (nearby) {
+        const type = Math.random() < 0.6 ? ItemType.HERB : ItemType.BREAD;
+        this.placeItemAt(nearby.x, nearby.y, new Item(type));
+      }
     }
   }
 
   populateItems() {
+    if (this.depth <= Config.earlyDepthLimit) {
+      this.populateEarlyItems();
+      return;
+    }
     const count = Config.baseItems + Math.floor(this.depth * 1.5);
     for (let i = 0; i < count; i++) {
       const found = this.randomFloorTile();
       if (!found) continue;
-      const { tile, x, y } = found;
-      if (tile.item) continue;
+      const { x, y } = found;
       const roll = Math.random();
       let item;
       if (roll < 0.25) {
@@ -1567,13 +1824,18 @@ class Game {
       } else {
         item = new Item(ItemType.SHIELD, randInt(1, 2 + Math.floor(this.depth / 3)));
       }
-      tile.item = item;
-      this.items.push({ item, x, y });
+      this.placeItemAt(x, y, item);
     }
   }
 
   populateTraps() {
-    const count = Config.baseTraps + this.depth * 3;
+    if (this.depth === 1) return;
+    let factor = 1;
+    if (this.depth === 2) factor = 0.25;
+    else if (this.depth === 3) factor = 0.4;
+    else if (this.depth <= 6) factor = 0.75;
+    const base = Config.baseTraps + this.depth * 3;
+    const count = Math.max(0, Math.floor(base * factor));
     for (let i = 0; i < count; i++) {
       const found = this.randomFloorTile();
       if (!found) continue;
@@ -1584,9 +1846,51 @@ class Game {
   }
 
   spawnEnemies(startCenter) {
-    const count = Config.baseEnemies + Math.floor(this.depth * 1.6);
     const safeRadius = 6;
     const types = [EnemyType.SPRINTER, EnemyType.STRATEGIST, EnemyType.WANDERER];
+    if (this.depth <= Config.earlyDepthLimit) {
+      const occupied = new Set([key(startCenter.x, startCenter.y)]);
+      const maxTotal = Math.max(4, Math.floor(this.rooms.length * 1.2));
+      let total = 0;
+      for (let i = 1; i < this.rooms.length && total < maxTotal; i++) {
+        const room = this.rooms[i];
+        let spawnCount = Math.random() < 0.25 ? 0 : 1;
+        if (Math.random() < 0.3) spawnCount = Math.min(Config.earlyRoomEnemyCap, spawnCount + 1);
+        const roomAvoid = new Set(occupied);
+        let attempts = 0;
+        while (spawnCount > 0 && attempts < 20) {
+          attempts++;
+          const spot = this.randomWalkableInRoom(room, roomAvoid);
+          if (!spot) break;
+          const spotKey = key(spot.x, spot.y);
+          roomAvoid.add(spotKey);
+          const distSq = (spot.x - startCenter.x) ** 2 + (spot.y - startCenter.y) ** 2;
+          if (distSq < safeRadius * safeRadius) continue;
+          const enemy = new Enemy(spot.x, spot.y, randChoice(types), this.depth);
+          this.entities.push(enemy);
+          occupied.add(spotKey);
+          total++;
+          spawnCount--;
+          if (total >= maxTotal) break;
+        }
+      }
+      const minTotal = Math.max(3, Math.floor(this.rooms.length * 0.6));
+      let safety = 0;
+      while (total < minTotal && safety < 30) {
+        safety++;
+        const found = this.randomFloorTile({ avoid: { x: startCenter.x, y: startCenter.y, radius: safeRadius } });
+        if (!found) break;
+        const { x, y } = found;
+        const spotKey = key(x, y);
+        if (occupied.has(spotKey)) continue;
+        const enemy = new Enemy(x, y, randChoice(types), this.depth);
+        this.entities.push(enemy);
+        occupied.add(spotKey);
+        total++;
+      }
+      return;
+    }
+    const count = Config.baseEnemies + Math.floor(this.depth * 1.6);
     for (let i = 0; i < count; i++) {
       const found = this.randomFloorTile({ avoid: { x: startCenter.x, y: startCenter.y, radius: safeRadius } });
       if (!found) continue;
@@ -1967,6 +2271,7 @@ class Game {
     const rows = this.map.length;
     const cellW = displayW / cols;
     const cellH = displayH / rows;
+    const itemCoords = [];
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const tile = this.map[y][x];
@@ -1977,10 +2282,54 @@ class Game {
         else if (tile.terrain === Terrain.STAIRS) color = "#2f4f6f";
         ctx.fillStyle = color;
         ctx.fillRect(x * cellW, y * cellH, cellW, cellH);
+        if (tile.item) {
+          itemCoords.push({ x, y });
+        }
       }
     }
-    ctx.fillStyle = "#60a5fa";
-    ctx.fillRect(this.player.x * cellW, this.player.y * cellH, cellW, cellH);
+    const baseRadius = Math.min(cellW, cellH);
+    const itemRadius = Math.max(2, baseRadius * 0.18);
+    ctx.fillStyle = "#2dd4bf";
+    for (const pos of itemCoords) {
+      const cx = pos.x * cellW + cellW / 2;
+      const cy = pos.y * cellH + cellH / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, itemRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const enemyRadius = Math.max(itemRadius * 1.2, baseRadius * 0.24);
+    ctx.fillStyle = "#f87171";
+    for (const enemy of this.entities) {
+      if (enemy === this.player || !enemy.isAlive()) continue;
+      const cx = enemy.x * cellW + cellW / 2;
+      const cy = enemy.y * cellH + cellH / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, enemyRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const playerRadius = Math.max(enemyRadius * 1.4, baseRadius * 0.32);
+    const playerX = this.player.x * cellW + cellW / 2;
+    const playerY = this.player.y * cellH + cellH / 2;
+    ctx.fillStyle = "#facc15";
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = Math.max(1.5, playerRadius * 0.28);
+    ctx.beginPath();
+    ctx.arc(playerX, playerY, playerRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    const dirAngles = { up: -Math.PI / 2, down: Math.PI / 2, left: Math.PI, right: 0 };
+    const angle = dirAngles[this.lastDirection] ?? -Math.PI / 2;
+    ctx.save();
+    ctx.translate(playerX, playerY);
+    ctx.rotate(angle);
+    ctx.fillStyle = "#fde68a";
+    ctx.beginPath();
+    ctx.moveTo(0, -playerRadius * 1.4);
+    ctx.lineTo(-playerRadius * 0.45, -playerRadius * 0.15);
+    ctx.lineTo(playerRadius * 0.45, -playerRadius * 0.15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
     ctx.restore();
   }
 
@@ -2021,13 +2370,23 @@ class Game {
     for (const enemy of this.entities) {
       if (enemy === this.player) continue;
       enemy.aware = true;
+      enemy.turnsSinceSeen = 0;
+      enemy.grace = 0;
     }
+  }
+
+  getHungerDrain() {
+    if (this.depth <= Config.earlyDepthLimit) {
+      return Config.earlyHungerPerTurn;
+    }
+    return Config.baseHungerPerTurn;
   }
 
   endPlayerTurn() {
     this.turn++;
-    this.player.hunger = Math.max(0, this.player.hunger - Config.hungerPerTurn);
-    if (this.player.hunger === 0) {
+    const hungerDrain = this.getHungerDrain();
+    this.player.hunger = Math.max(0, this.player.hunger - hungerDrain);
+    if (this.player.hunger <= 0) {
       this.player.hp = Math.max(0, this.player.hp - Config.hungerDamage);
       this.pushMessage("空腹でダメージを受けた…");
       if (this.player.hp <= 0) {
@@ -2077,6 +2436,11 @@ class Game {
       enemy.energy += enemy.speed;
       while (enemy.energy >= 100) {
         enemy.energy -= 100;
+        const early = this.depth <= Config.earlyDepthLimit;
+        if (early && Math.random() > Config.earlyEnemyActionChance) {
+          if (enemy.grace > 0) enemy.grace--;
+          continue;
+        }
         this.enemyAct(enemy);
         if (!this.player.isAlive()) return;
       }
@@ -2084,27 +2448,50 @@ class Game {
   }
 
   enemyAct(enemy) {
-    if (!enemy.aware) {
-      const dist = Math.abs(enemy.x - this.player.x) + Math.abs(enemy.y - this.player.y);
-      if (dist <= 6 || enemy.grace <= 0) {
-        enemy.aware = true;
-      } else {
-        enemy.grace--;
-      }
-    }
-    if (!enemy.aware) {
-      this.wander(enemy);
-      return;
-    }
     const dx = this.player.x - enemy.x;
     const dy = this.player.y - enemy.y;
-    if (Math.abs(dx) + Math.abs(dy) === 1) {
+    const distManhattan = Math.abs(dx) + Math.abs(dy);
+    const distSq = dx * dx + dy * dy;
+    const early = this.depth <= Config.earlyDepthLimit;
+    const sightRadius = early ? Config.earlyEnemySight : 6;
+    const withinSight = early ? distSq <= sightRadius * sightRadius : distManhattan <= sightRadius;
+
+    if (!enemy.aware) {
+      if (enemy.grace > 0) {
+        enemy.grace--;
+      }
+      if ((enemy.grace <= 0 && withinSight) || (!early && enemy.grace <= 0)) {
+        enemy.aware = true;
+        enemy.turnsSinceSeen = 0;
+      } else {
+        this.wander(enemy);
+        return;
+      }
+    }
+
+    if (early) {
+      if (withinSight) {
+        enemy.turnsSinceSeen = 0;
+      } else {
+        enemy.turnsSinceSeen = (enemy.turnsSinceSeen || 0) + 1;
+        if (enemy.turnsSinceSeen >= Config.earlyEnemyChaseTurns) {
+          enemy.aware = false;
+          enemy.turnsSinceSeen = 0;
+          enemy.grace = Config.graceTurns;
+          this.wander(enemy);
+          return;
+        }
+      }
+    }
+
+    if (distManhattan === 1) {
       this.resolveCombat(enemy, this.player);
       if (!this.player.isAlive()) {
         this.gameOver("敵に倒されてしまった…");
       }
       return;
     }
+
     let path = null;
     if (enemy.type === EnemyType.STRATEGIST) {
       path = this.findPath(enemy, this.player);
@@ -2438,7 +2825,9 @@ class Game {
     document.getElementById("ui-hp").textContent = `${this.player.hp} / ${this.player.maxHp}`;
     document.getElementById("ui-level").textContent = this.player.level;
     document.getElementById("ui-exp").textContent = this.player.exp;
-    document.getElementById("ui-hunger").textContent = `${this.player.hunger}%`;
+    const hungerValue = Math.max(0, this.player.hunger);
+    const hungerDisplay = Number.isInteger(hungerValue) ? hungerValue : hungerValue.toFixed(1);
+    document.getElementById("ui-hunger").textContent = `${hungerDisplay}%`;
     document.getElementById("ui-atk").textContent = this.player.attack;
     document.getElementById("ui-def").textContent = this.player.defense;
     document.getElementById("ui-inventory").textContent = `${this.inventoryCount()} / ${Config.maxInventory}`;
@@ -2483,25 +2872,64 @@ class Game {
         this.drawTile(ctx, tile, x, y, tileSize, visible);
       }
     }
+    const now = performance.now();
     for (const entity of this.entities) {
       if (!entity.isAlive()) continue;
       let visible = true;
       if (this.player?.effects.fog > 0) {
-        const dx = entity.x - this.player.x;
-        const dy = entity.y - this.player.y;
-        visible = dx * dx + dy * dy <= Config.fogRadius * Config.fogRadius;
+        const dxFog = entity.x - this.player.x;
+        const dyFog = entity.y - this.player.y;
+        visible = dxFog * dxFog + dyFog * dyFog <= Config.fogRadius * Config.fogRadius;
       }
       if (!visible) continue;
       const px = entity.x * tileSize;
       const py = entity.y * tileSize;
-      ctx.fillStyle = entity === this.player ? "#ffeb3b" : "#ff6b6b";
-      ctx.strokeStyle = "#111";
-      ctx.lineWidth = 2;
-      ctx.font = `${tileSize - 6}px 'Noto Sans JP', sans-serif`;
-      ctx.textBaseline = "top";
-      const symbol = entity === this.player ? "私" : "敵";
-      ctx.strokeText(symbol, px + 4, py + 2);
-      ctx.fillText(symbol, px + 4, py + 2);
+      if (entity === this.player) {
+        const centerX = px + tileSize / 2;
+        const centerY = py + tileSize / 2;
+        const haloRadius = (tileSize * 1.3) / 2;
+        const gradient = ctx.createRadialGradient(centerX, centerY, tileSize * 0.2, centerX, centerY, haloRadius);
+        gradient.addColorStop(0, "#facc15aa");
+        gradient.addColorStop(1, "rgba(250, 204, 21, 0)");
+        ctx.save();
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, haloRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        const pulse = 1 + 0.04 * Math.sin((now / 400) * Math.PI * 2);
+        const size = tileSize * 0.9 * pulse;
+        const half = size / 2;
+        const bodyX = centerX - half;
+        const bodyY = centerY - half;
+        const corner = size * 0.25;
+        ctx.save();
+        ctx.fillStyle = "#facc15";
+        ctx.strokeStyle = "#0f172a";
+        ctx.lineWidth = 4;
+        drawRoundedRect(ctx, bodyX, bodyY, size, size, corner);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#fde68a";
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, size * 0.18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        const centerX = px + tileSize / 2;
+        const centerY = py + tileSize / 2;
+        const enemySize = tileSize * 0.65;
+        const halfEnemy = enemySize / 2;
+        ctx.save();
+        ctx.fillStyle = "#ef4444";
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 2;
+        drawRoundedRect(ctx, centerX - halfEnemy, centerY - halfEnemy, enemySize, enemySize, enemySize * 0.2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
     }
     ctx.restore();
     this.drawMinimap();

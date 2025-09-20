@@ -68,6 +68,7 @@
             <input type="range" name="padSpacing" min="8" max="20" step="1" />
           </label>
           <label><input type="checkbox" name="haptics" /> タップ時にバイブ</label>
+          <label><input type="checkbox" name="autoHide" /> Dパッド自動縮小</label>
           <label><input type="checkbox" name="reduceMotion" /> Reduce Motion</label>
           <label><input type="checkbox" name="highContrast" /> 高コントラスト</label>
           <label>文字サイズ
@@ -140,7 +141,8 @@
     </div>
   </main>
 
-  <nav id="pad-dock" data-hand="right" aria-label="操作ドック">
+  <nav id="pad-dock" data-hand="right" aria-label="操作ドック" aria-expanded="true">
+    <button id="pad-handle" type="button" aria-label="操作ドックを表示"></button>
     <div class="dock-inner">
       <div id="reach-guide" aria-hidden="true"></div>
       <div id="thumb-zone">
